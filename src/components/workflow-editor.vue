@@ -1,0 +1,2091 @@
+﻿<script setup lang="ts">
+import {computed, markRaw, onMounted, ref, watch} from 'vue'
+import {useRouter} from 'vue-router'
+import {Background} from '@vue-flow/background'
+import {Controls} from '@vue-flow/controls'
+import {VueFlow, type Connection} from '@vue-flow/core'
+import {useVueFlow} from '@vue-flow/core'
+import {
+  ChevronDown,
+  ChevronRight,
+  Link2,
+  Pencil,
+  Play,
+  Plus,
+  Save,
+  Trash2,
+  Unlink,
+  Users,
+} from 'lucide-vue-next'
+import {Button} from '@/components/ui/button'
+import {DatePicker} from '@/components/ui/date-picker'
+import {Input} from '@/components/ui/input'
+import {Label} from '@/components/ui/label'
+import {ScrollArea} from '@/components/ui/scroll-area'
+import {Switch} from '@/components/ui/switch'
+import {Textarea} from '@/components/ui/textarea'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog'
+import SmoothEdge from '@/components/vue-flow/edges/smooth-edge.vue'
+import CustomConnectionLine from '@/components/vue-flow/custom-connection-line.vue'
+import ConditionNode from '@/components/vue-flow/nodes/condition-node.vue'
+import CourseNode from '@/components/vue-flow/nodes/course-node.vue'
+import StartNode from '@/components/vue-flow/nodes/start-node.vue'
+import WorkflowGridPreview from '@/components/workflow-grid-preview.vue'
+import {useToast} from '@/components/ui/toast'
+import {
+  buildCoursePayload,
+  CLASS_INSERT_STATUS_OPTIONS,
+  CONTRACT_STATUS_OPTIONS,
+  EXECUTION_MODE_OPTIONS,
+  conditionNodeId,
+  courseNodeId,
+  edgeKindFromHandles,
+  edgeStroke,
+  parseCourseId,
+  portColor,
+  START_NODE_ID,
+  uid,
+  onlyWithContractFlag,
+  type StartPayload,
+  type ConditionPayload,
+  type Course,
+  type CourseClass,
+} from '@/lib/workflow'
+import {api} from '@/lib/api'
+
+const {toast} = useToast()
+const router = useRouter()
+const props = defineProps<{
+  flowId: string
+  workflowId?: string | number
+  initialTab?: 'workflow' | 'evolution'
+}>()
+const {
+  nodes,
+  edges,
+  setNodes,
+  setEdges,
+  project,
+  onNodesChange,
+  onEdgesChange,
+  addNodes
+} = useVueFlow({
+  id: props.flowId,
+})
+
+const nodeTypes = {
+  course: markRaw(CourseNode),
+  condition: markRaw(ConditionNode),
+  start: markRaw(StartNode),
+}
+
+const edgeTypes = {
+  smooth: markRaw(SmoothEdge),
+}
+
+const apiCourses = ref<Course[]>([])
+const apiClasses = ref<CourseClass[]>([])
+const apiWorkflows = ref<any[]>([])
+const apiOnline = ref(true)
+
+function formatApiError(e: unknown) {
+  const err = e as any
+  const message =
+    typeof err?.message === 'string' && err.message.trim()
+      ? err.message.trim()
+      : 'Nao foi possivel completar a operacao.'
+  const errors = Array.isArray(err?.errors)
+    ? err.errors.map((item: any) => String(item)).filter(Boolean)
+    : []
+  if (errors.length === 0) return message
+  return `${message} Erros: ${errors.join(' | ')}`
+}
+
+function formatDayOfWeek(value?: string | null) {
+  if (!value) return ''
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+  if (/[^\x00-\x7F]/.test(raw)) return raw
+  const normalized = raw
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[\s_]+/g, '')
+  const map: Record<string, string> = {
+    monday: 'Segunda',
+    segunda: 'Segunda',
+    seg: 'Segunda',
+    '1': 'Segunda',
+    tuesday: 'Terca',
+    terca: 'Terca',
+    tercafeira: 'Terca',
+    tue: 'Terca',
+    '2': 'Terca',
+    wednesday: 'Quarta',
+    quarta: 'Quarta',
+    qua: 'Quarta',
+    '3': 'Quarta',
+    thursday: 'Quinta',
+    quinta: 'Quinta',
+    qui: 'Quinta',
+    '4': 'Quinta',
+    friday: 'Sexta',
+    sexta: 'Sexta',
+    sex: 'Sexta',
+    '5': 'Sexta',
+    saturday: 'Sabado',
+    sabado: 'Sabado',
+    sab: 'Sabado',
+    '6': 'Sabado',
+    sunday: 'Domingo',
+    domingo: 'Domingo',
+    dom: 'Domingo',
+    '0': 'Domingo',
+    '7': 'Domingo',
+  }
+  return map[normalized] || raw
+}
+
+const query = ref('')
+const workflowSearch = ref('')
+const expandedCourses = ref<Set<number>>(new Set())
+const preselect = ref<Record<number, Set<number>>>({})
+const connectMode = ref(false)
+const selectedNodeId = ref<string | null>(null)
+const selectedEdgeId = ref<string | null>(null)
+const mainTab = ref<'workflow' | 'evolution'>('workflow')
+const workflowMode = ref<'list' | 'editor'>('list')
+const conditionDetailsOpenId = ref<string | null>(null)
+const activeWorkflow = ref<{ id?: string | number; name: string; description: string; status: string } | null>(null)
+const newWorkflow = ref({name: '', description: '', status: 'active'})
+const createWorkflowOpen = ref(false)
+const editWorkflowOpen = ref(false)
+const editWorkflow = ref<{ id: string | number; name: string; description: string; status: string } | null>(null)
+const workflowStatusOptions = [
+  {value: 'active', label: 'Ativo'},
+  {value: 'inactive', label: 'Inativo'},
+  {value: 'draft', label: 'Rascunho'},
+]
+const repeatIntervalOptions = [
+  {value: '', label: 'Nao repetir'},
+  {value: '10', label: 'A cada 10 min'},
+  {value: '20', label: 'A cada 20 min'},
+  {value: '30', label: 'A cada 30 min'},
+  {value: '60', label: 'A cada 1h'},
+  {value: '90', label: 'A cada 1h30'},
+  {value: '120', label: 'A cada 2h'},
+]
+
+function setActiveWorkflow(
+    wf: any,
+    opts?: { mode?: 'list' | 'editor'; tab?: 'workflow' | 'evolution'; notify?: boolean },
+) {
+  if (!wf) return
+  activeWorkflow.value = {
+    id: wf.id,
+    name: wf.name || '',
+    description: wf.description || '',
+    status: wf.status || 'active',
+  }
+  setNodes(wf.nodes || [])
+  setEdges(wf.edges || [])
+  selectedNodeId.value = null
+  selectedEdgeId.value = null
+  conditionDetailsOpenId.value = null
+  if (opts?.tab) mainTab.value = opts.tab
+  if (opts?.mode) workflowMode.value = opts.mode
+  syncNodeMeta()
+  syncEdgesForStart()
+  if (opts?.notify) {
+    toast({
+      title: 'Workflow carregado',
+      description: `Workflow "${wf.name}" foi carregado com sucesso.`,
+    })
+  }
+}
+
+function resetWorkflowState() {
+  activeWorkflow.value = null
+  setNodes([])
+  setEdges([])
+  selectedNodeId.value = null
+  selectedEdgeId.value = null
+  conditionDetailsOpenId.value = null
+  workflowMode.value = 'list'
+  mainTab.value = 'workflow'
+}
+
+const classesByCourse = computed(() => {
+  const map: Record<number, any[]> = {}
+  apiClasses.value.forEach(cls => {
+    // @ts-ignore
+    const cId = cls.courseId
+    if (cId) {
+      if (!map[cId]) map[cId] = []
+      map[cId].push(cls)
+    }
+  })
+  return map
+})
+
+const courses = computed(() => {
+  const q = query.value.trim().toLowerCase()
+  if (!q) return apiCourses.value
+  return apiCourses.value.filter((c) => c.name.toLowerCase().includes(q))
+})
+
+const filteredWorkflows = computed(() => {
+  const q = workflowSearch.value.trim().toLowerCase()
+  if (!q) return apiWorkflows.value
+  return apiWorkflows.value.filter((wf) => {
+    const name = String(wf?.name || '').toLowerCase()
+    const desc = String(wf?.description || '').toLowerCase()
+    const id = String(wf?.id || '').toLowerCase()
+    return name.includes(q) || desc.includes(q) || id.includes(q)
+  })
+})
+
+onMounted(async () => {
+  try {
+    const [cRes, clRes, wfRes] = await Promise.all([
+      api.getCourses(),
+      api.getClasses(),
+      api.getWorkflows()
+    ])
+    apiCourses.value = cRes.data
+    apiClasses.value = clRes.data
+    apiWorkflows.value = wfRes.data
+    apiOnline.value = !cRes.isFallback && !clRes.isFallback && !wfRes.isFallback
+  } catch (e) {
+    console.error('Falha ao carregar dados da API', e)
+    apiOnline.value = false
+  }
+})
+
+function applyRouteSelection() {
+  const routeId = props.workflowId
+  if (routeId === undefined || routeId === null || routeId === '') {
+    if (activeWorkflow.value) resetWorkflowState()
+    return
+  }
+  const targetId = String(routeId)
+  if (activeWorkflow.value && String(activeWorkflow.value.id) === targetId) {
+    const tab = props.initialTab ?? 'workflow'
+    mainTab.value = tab
+    if (tab === 'workflow') workflowMode.value = 'editor'
+    else workflowMode.value = 'list'
+    return
+  }
+  const wf = apiWorkflows.value.find((item) => String(item.id) === targetId)
+  if (!wf) return
+  const tab = props.initialTab ?? 'workflow'
+  const mode = tab === 'evolution' ? 'list' : 'editor'
+  setActiveWorkflow(wf, { tab, mode })
+}
+
+watch(
+    () => [props.workflowId, props.initialTab, apiWorkflows.value.length],
+    () => {
+      applyRouteSelection()
+    },
+    {immediate: true},
+)
+
+function goToWorkflowTab() {
+  mainTab.value = 'workflow'
+  if (activeWorkflow.value?.id !== undefined) {
+    workflowMode.value = 'editor'
+    router.push({name: 'workflow', params: {id: activeWorkflow.value.id}})
+  } else {
+    workflowMode.value = 'list'
+    router.push({name: 'home'})
+  }
+}
+
+function goToEvolutionTab() {
+  mainTab.value = 'evolution'
+  if (activeWorkflow.value?.id !== undefined) {
+    router.push({name: 'workflow-apprentices', params: {id: activeWorkflow.value.id}})
+  } else {
+    router.push({name: 'home'})
+  }
+}
+
+function loadWorkflow(wf: any) {
+  setActiveWorkflow(wf, { mode: 'editor', tab: 'workflow', notify: true })
+  router.push({ name: 'workflow', params: { id: wf.id } })
+}
+
+function openEvolutionWorkflow(wf: any) {
+  setActiveWorkflow(wf, { mode: 'list', tab: 'evolution' })
+  router.push({ name: 'workflow-apprentices', params: { id: wf.id } })
+}
+
+function openEditWorkflow(wf: any) {
+  if (!wf) return
+  editWorkflow.value = {
+    id: wf.id,
+    name: wf.name || '',
+    description: wf.description || '',
+    status: wf.status || 'active',
+  }
+  editWorkflowOpen.value = true
+}
+
+const selectedNode = computed(() => nodes.value.find((n) => n.id === selectedNodeId.value) ?? null)
+const selectedConditionRequiresContract = computed(() => {
+  if (!selectedNode.value || selectedNode.value.type !== 'condition') return false
+  return conditionRequiresContract(selectedNode.value.id)
+})
+
+const flowWrapper = ref<HTMLDivElement | null>(null)
+
+function getViewportCenterPosition(nodeSize: { width: number; height: number }) {
+  const bounds = flowWrapper.value?.getBoundingClientRect()
+  if (!bounds) return { x: 250, y: 150 }
+  const center = project({
+    x: bounds.left + bounds.width / 2,
+    y: bounds.top + bounds.height / 2,
+  })
+  return {
+    x: center.x - nodeSize.width / 2,
+    y: center.y - nodeSize.height / 2,
+  }
+}
+
+onNodesChange((changes) => {
+  // We can let Vue Flow handle the changes automatically since nodes is a ref from useVueFlow
+})
+
+onEdgesChange((changes) => {
+})
+
+watch([() => nodes.value.filter(n => n?.selected).map(n => n.id), () => edges.value.filter(e => e?.selected).map(e => e.id)], ([selNodes, selEdges]) => {
+  selectedNodeId.value = selNodes[0] ?? null
+  selectedEdgeId.value = selEdges[0] ?? null
+})
+
+watch(
+    () => edges.value,
+    () => {
+      enforceContractCheckForConditions()
+    },
+    {deep: true},
+)
+
+function toggleConditionDetails(nodeId: string) {
+  conditionDetailsOpenId.value =
+      conditionDetailsOpenId.value === nodeId ? null : nodeId
+}
+
+function syncNodeMeta() {
+  setNodes(
+      nodes.value.map((n) => {
+        let payload = n.data?.payload
+        if (n.type === 'condition') {
+          const evolutionMode =
+            n.data?.payload?.evolutionMode ??
+            (n.data?.payload?.useClassEndDate
+              ? 'classEnd'
+              : n.data?.payload?.evolveAt
+                ? 'specific'
+                : n.data?.payload?.startDate || n.data?.payload?.endDate
+                  ? 'range'
+                  : 'none')
+          payload = {
+            ...(n.data?.payload || {}),
+            evolutionMode,
+            evolveAt: n.data?.payload?.evolveAt ?? '',
+            startDate: n.data?.payload?.startDate ?? '',
+            endDate: n.data?.payload?.endDate ?? '',
+            useClassEndDate: evolutionMode === 'classEnd' ? true : false,
+            classInsertStatus: n.data?.payload?.classInsertStatus ?? 'inProgress',
+            classExitStatus: n.data?.payload?.classExitStatus ?? 'conclude',
+            classCheckStatus: n.data?.payload?.classCheckStatus ?? 'inProgress',
+            keepSameDayOfWeek: n.data?.payload?.keepSameDayOfWeek ?? false,
+          }
+        } else if (n.type === 'start') {
+          payload = {
+            ...(n.data?.payload || {}),
+            executionMode: n.data?.payload?.executionMode ?? 'once',
+            startDate: n.data?.payload?.startDate ?? '',
+            endDate: n.data?.payload?.endDate ?? '',
+            runDailyAt: n.data?.payload?.runDailyAt ?? '08:00',
+            runIntervalMinutes: n.data?.payload?.runIntervalMinutes ?? null,
+          }
+        }
+
+        return {
+          ...n,
+          data: {
+            ...n.data,
+            connectMode: connectMode.value,
+            payload,
+            onRemove: removeNode,
+            nodeId: n.id,
+            ...(n.type === 'condition'
+                ? {
+                  showDetails: conditionDetailsOpenId.value === n.id,
+                  onToggleDetails: toggleConditionDetails,
+                }
+                : {}),
+          },
+        }
+      }),
+  )
+}
+
+
+watch(connectMode, syncNodeMeta)
+watch(conditionDetailsOpenId, syncNodeMeta)
+
+function toggleExpanded(courseId: number) {
+  const next = new Set(expandedCourses.value)
+  if (next.has(courseId)) next.delete(courseId)
+  else next.add(courseId)
+  expandedCourses.value = next
+}
+
+function setPreselectForCourse(courseId: number, next: Set<number>) {
+  preselect.value = {...preselect.value, [courseId]: next}
+
+  const id = courseNodeId(courseId)
+  const classes = (classesByCourse.value[courseId] ?? []).filter((c) => next.has(c.id))
+  if (!nodes.value.some((n) => n.id === id)) return
+
+  setNodes(
+      nodes.value.map((n) =>
+          n.id !== id
+              ? n
+              : {
+                ...n,
+                data: {
+                  ...n.data,
+                  payload: {
+                    ...n.data?.payload,
+                    classes,
+                  },
+                },
+              },
+      ),
+  )
+}
+
+function togglePreselect(courseId: number, classId: number, checked: boolean) {
+  const current = new Set(preselect.value[courseId] ?? [])
+  if (checked) current.add(classId)
+  else current.delete(classId)
+  setPreselectForCourse(courseId, current)
+}
+
+function selectAllCourseClasses(courseId: number) {
+  const allClasses = classesByCourse.value[courseId] ?? []
+  if (allClasses.length === 0) return
+  const next = new Set(allClasses.map((cls) => cls.id))
+  setPreselectForCourse(courseId, next)
+}
+
+function addStartNode() {
+  const existing = nodes.value.find((n) => n.type === 'start')
+  if (existing) {
+    selectedNodeId.value = existing.id
+    selectedEdgeId.value = null
+    toast({
+      title: 'Inicio ja definido',
+      description: 'Ja existe um no de inicio no workflow.'
+    })
+    return
+  }
+
+  const id = START_NODE_ID
+  const newNode = {
+    id,
+    type: 'start',
+    position: {x: 40, y: 40},
+    data: {
+      payload: {
+        executionMode: 'once',
+        startDate: '',
+        endDate: '',
+        runDailyAt: '08:00',
+        runIntervalMinutes: null,
+      },
+      connectMode: connectMode.value,
+      onRemove: removeNode,
+      nodeId: id,
+    },
+  }
+
+  addNodes([newNode])
+  selectedNodeId.value = id
+  selectedEdgeId.value = null
+}
+
+function addCourseNode(courseId: number, position?: { x: number; y: number }) {
+  const id = courseNodeId(courseId)
+  const payload = buildCoursePayload(courseId, preselect.value, apiCourses.value, classesByCourse.value)
+
+  const existing = nodes.value.find((n) => n.id === id)
+  if (existing) {
+    const current = existing.data?.payload?.classes ?? []
+    const seen = new Set(current.map((c: { id: number }) => c.id))
+    const merged = [...current]
+    for (const cls of payload.classes) {
+      if (!seen.has(cls.id)) {
+        seen.add(cls.id)
+        merged.push(cls)
+      }
+    }
+
+    setNodes(
+        nodes.value.map((n) =>
+            n.id !== id
+                ? n
+                : {
+                  ...n,
+                  data: {
+                    ...n.data,
+                    payload: {...n.data?.payload, ...payload, classes: merged},
+                    connectMode: connectMode.value,
+                    onRemove: removeNode,
+                    nodeId: id,
+                  },
+                },
+        ),
+    )
+  } else {
+    const newNode = {
+      id,
+      type: 'course',
+      position: position ?? {x: 80, y: 80},
+      data: {
+        payload,
+        connectMode: connectMode.value,
+        onRemove: removeNode,
+        nodeId: id,
+      },
+    }
+    addNodes([newNode])
+  }
+
+  selectedNodeId.value = id
+  selectedEdgeId.value = null
+}
+
+function addConditionNode() {
+  const id = conditionNodeId(uid())
+  const payload: ConditionPayload = {
+    startDate: '',
+    endDate: '',
+    evolveAt: '',
+    evolutionMode: 'none',
+    minAttendance: 100,
+    minExamGrade: 0,
+    mustCompleteLessons: false,
+    checkContract: false,
+    contractStatus: [],
+    classInsertStatus: 'inProgress',
+    classExitStatus: 'conclude',
+    classCheckStatus: 'inProgress',
+    hasMinGrade: false,
+    hasAttendance: false,
+    useClassEndDate: false,
+    keepSameDayOfWeek: false,
+    isBalanced: false,
+    balanceStrategy: ['occupancy'],
+  }
+
+  const position = getViewportCenterPosition({ width: 280, height: 120 })
+  const newNode = {
+    id,
+    type: 'condition',
+    position,
+    data: {
+      payload,
+      connectMode: connectMode.value,
+      onRemove: removeNode,
+      nodeId: id,
+      showDetails: conditionDetailsOpenId.value === id,
+      onToggleDetails: toggleConditionDetails,
+    },
+  }
+
+  addNodes([newNode])
+
+  selectedNodeId.value = id
+  selectedEdgeId.value = null
+}
+
+function removeNode(nodeId: string) {
+  setEdges(edges.value.filter((e) => e.source !== nodeId && e.target !== nodeId))
+  setNodes(nodes.value.filter((n) => n.id !== nodeId))
+  if (selectedNodeId.value === nodeId) selectedNodeId.value = null
+  if (conditionDetailsOpenId.value === nodeId) conditionDetailsOpenId.value = null
+  selectedEdgeId.value = null
+}
+
+function clearConnections() {
+  setEdges([])
+  selectedEdgeId.value = null
+}
+
+function parseHandleClassId(handle?: string | null) {
+  if (!handle) return null
+  const parts = handle.split(':')
+  if (parts.length < 2) return null
+  const id = Number(parts[1])
+  return Number.isFinite(id) ? id : null
+}
+
+function resolveClassById(classId: number) {
+  for (const node of nodes.value) {
+    if (node.type !== 'course') continue
+    const classes = node.data?.payload?.classes || []
+    const match = classes.find((cls: any) => Number(cls.id) === classId)
+    if (match) return match
+  }
+  return apiClasses.value.find((cls) => Number(cls.id) === classId)
+}
+
+function conditionRequiresContract(conditionId: string) {
+  const classIds = new Set<number>()
+  edges.value.forEach((edge) => {
+    if (edge.target === conditionId && edge.targetHandle === 'if-in') {
+      const id = parseHandleClassId(edge.sourceHandle)
+      if (id !== null) classIds.add(id)
+    }
+    if (edge.source === conditionId && (edge.sourceHandle === 'if-ok' || edge.sourceHandle === 'if-nok')) {
+      const id = parseHandleClassId(edge.targetHandle)
+      if (id !== null) classIds.add(id)
+    }
+  })
+  for (const id of classIds) {
+    const cls = resolveClassById(id)
+    if (onlyWithContractFlag(cls)) return true
+  }
+  return false
+}
+
+function enforceContractCheckForConditions() {
+  const required = new Set(
+      nodes.value
+          .filter((n) => n.type === 'condition')
+          .filter((n) => conditionRequiresContract(n.id))
+          .map((n) => n.id),
+  )
+  if (required.size === 0) return
+  let changed = false
+  const nextNodes = nodes.value.map((n) => {
+    if (n.type !== 'condition' || !required.has(n.id)) return n
+    if (n.data?.payload?.checkContract) return n
+    changed = true
+    return {
+      ...n,
+      data: {
+        ...n.data,
+        payload: {
+          ...n.data?.payload,
+          checkContract: true,
+        },
+      },
+    }
+  })
+  if (changed) setNodes(nextNodes)
+}
+
+function exportJson() {
+  const data = {
+    nodes: nodes.value.map((n) => ({
+      nodeKey: n.id,
+      type: n.type,
+      x: Math.round(n.position.x),
+      y: Math.round(n.position.y),
+      payload: n.data?.payload,
+    })),
+    edges: edges.value.map((e) => ({
+      id: e.id,
+      source: e.source,
+      target: e.target,
+      sourceHandle: e.sourceHandle,
+      targetHandle: e.targetHandle,
+      data: e.data,
+    })),
+  }
+  alert('Export gerado. Veja o console.')
+  console.log('WORKFLOW_JSON', data)
+}
+
+function onDragStartCourse(event: DragEvent, courseId: number) {
+  if (!event.dataTransfer) return
+  event.dataTransfer.setData('application/vueflow', JSON.stringify({type: 'course', courseId: Number(courseId)}))
+  event.dataTransfer.effectAllowed = 'move'
+}
+
+function handleDrop(event: DragEvent) {
+  event.preventDefault()
+  const raw = event.dataTransfer?.getData('application/vueflow')
+  if (!raw) return
+
+  let payload: { type: string; courseId?: number }
+  try {
+    payload = JSON.parse(raw)
+  } catch {
+    return
+  }
+
+  const bounds = flowWrapper.value?.getBoundingClientRect()
+  if (!bounds) return
+
+  const position = project({
+    x: event.clientX - bounds.left,
+    y: event.clientY - bounds.top,
+  })
+
+  if (payload.type === 'course') {
+    const courseId = typeof payload.courseId === 'number' ? payload.courseId : Number(payload.courseId)
+    if (!Number.isFinite(courseId)) return
+    const x = Math.max(0, position.x - 160)
+    const y = Math.max(0, position.y - 40)
+    addCourseNode(courseId, {x, y})
+  }
+}
+
+function handleDragOver(event: DragEvent) {
+  event.preventDefault()
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+}
+
+
+function createWorkflow() {
+  const name = newWorkflow.value.name.trim()
+  if (!name) {
+    toast({
+      title: 'Informe um nome',
+      description: 'O nome do workflow e obrigatorio para criar.',
+      variant: 'destructive',
+    })
+    return
+  }
+
+  activeWorkflow.value = {
+    name,
+    description: newWorkflow.value.description.trim(),
+    status: newWorkflow.value.status || 'active',
+  }
+  setNodes([])
+  setEdges([])
+  selectedNodeId.value = null
+  selectedEdgeId.value = null
+  conditionDetailsOpenId.value = null
+  workflowMode.value = 'editor'
+  mainTab.value = 'workflow'
+  newWorkflow.value = {name: '', description: '', status: 'active'}
+  createWorkflowOpen.value = false
+}
+
+function backToList() {
+  workflowMode.value = 'list'
+  router.push({ name: 'home' })
+}
+
+async function deleteWorkflow(wf: any) {
+  if (!wf) return
+  const name = wf?.name ? `"${wf.name}"` : 'este workflow'
+  const ok = window.confirm(`Excluir ${name}? Essa acao nao pode ser desfeita.`)
+  if (!ok) return
+  try {
+    const res = await api.deleteWorkflow(String(wf.id))
+    apiWorkflows.value = apiWorkflows.value.filter((w) => String(w.id) !== String(wf.id))
+    if (activeWorkflow.value && String(activeWorkflow.value.id) === String(wf.id)) {
+      activeWorkflow.value = null
+      setNodes([])
+      setEdges([])
+      selectedNodeId.value = null
+      selectedEdgeId.value = null
+      conditionDetailsOpenId.value = null
+      workflowMode.value = 'list'
+      router.push({ name: 'home' })
+    }
+    toast({
+      title: res?.isFallback ? 'Workflow removido (simulado)' : 'Workflow removido',
+      description: res?.isFallback
+          ? 'A API esta offline. A remocao foi aplicada apenas localmente.'
+          : 'Workflow removido com sucesso.',
+    })
+  } catch (e) {
+    console.error('Erro ao remover workflow', e)
+    toast({
+      title: 'Erro ao remover',
+      description: formatApiError(e),
+      variant: 'destructive',
+    })
+  }
+}
+
+function workflowStatusMeta(status?: string) {
+  const value = String(status || '').toLowerCase()
+  if (value === 'active') {
+    return {label: 'Ativo', class: 'bg-emerald-50 border-emerald-200 text-emerald-700'}
+  }
+  if (value === 'inactive') {
+    return {label: 'Inativo', class: 'bg-slate-100 border-slate-200 text-slate-600'}
+  }
+  return {label: 'Rascunho', class: 'bg-amber-50 border-amber-200 text-amber-700'}
+}
+
+async function saveEditWorkflow() {
+  if (!editWorkflow.value) return
+  const current = apiWorkflows.value.find((wf) => String(wf.id) === String(editWorkflow.value?.id))
+  if (!current) return
+  try {
+    const payload = {
+      ...current,
+      name: editWorkflow.value.name.trim(),
+      description: editWorkflow.value.description.trim(),
+      status: editWorkflow.value.status || 'active',
+    }
+    const res = await api.updateWorkflow(String(current.id), payload)
+    const wfRes = await api.getWorkflows()
+    apiWorkflows.value = wfRes.data
+    if (activeWorkflow.value && String(activeWorkflow.value.id) === String(current.id)) {
+      activeWorkflow.value = {
+        ...activeWorkflow.value,
+        name: payload.name,
+        description: payload.description,
+        status: payload.status,
+      }
+    }
+    editWorkflowOpen.value = false
+    toast({
+      title: res?.isFallback ? 'Workflow Simulado' : 'Workflow Atualizado',
+      description: res?.isFallback
+          ? 'A API esta offline. As alteracoes foram aplicadas localmente para demonstracao.'
+          : 'Workflow atualizado com sucesso.',
+    })
+  } catch (e) {
+    console.error('Erro ao atualizar workflow', e)
+    toast({
+      title: 'Erro ao atualizar',
+      description: formatApiError(e),
+      variant: 'destructive',
+    })
+  }
+}
+
+async function publishWorkflow() {
+  if (!activeWorkflow.value) return
+  try {
+    const payload = {
+      name: activeWorkflow.value.name,
+      description: activeWorkflow.value.description,
+      status: activeWorkflow.value.status,
+      nodes: nodes.value,
+      edges: edges.value,
+    }
+
+    let res: any
+    if (activeWorkflow.value.id) {
+      res = await api.updateWorkflow(String(activeWorkflow.value.id), payload)
+    } else {
+      res = await api.saveWorkflow({
+        id: `workflow-${Date.now()}`,
+        ...payload,
+      })
+    }
+
+    if (!activeWorkflow.value.id && res?.data?.id) {
+      activeWorkflow.value.id = res.data.id
+    }
+
+    const wfRes = await api.getWorkflows()
+    apiWorkflows.value = wfRes.data
+
+    toast({
+      title: res?.isFallback ? 'Workflow Simulado' : 'Workflow Publicado',
+      description: res?.isFallback
+          ? 'A API esta offline. O workflow foi processado localmente para demonstracao.'
+          : 'Workflow salvo com sucesso.',
+    })
+  } catch (e) {
+    console.error('Erro ao publicar', e)
+    toast({
+      title: 'Erro na publica-?o',
+      description: formatApiError(e),
+      variant: 'destructive',
+    })
+  }
+}
+
+function isValidConnection(connection: Connection) {
+  const {sourceHandle, targetHandle, target} = connection
+  if (!sourceHandle || !targetHandle) return false
+
+  if (sourceHandle === 'start-out') {
+    const existing = edges.value.find((e) => e.sourceHandle === 'start-out')
+    if (existing && target && existing.target !== target) return false
+    return targetHandle.startsWith('class-in')
+  }
+
+  // Se a saída for uma turma
+  if (sourceHandle.startsWith('class-out')) {
+    // Só pode conectar em uma condição (if-in)
+    return targetHandle === 'if-in'
+  }
+
+  // Se a saída for uma condição (OK ou NOK)
+  if (sourceHandle === 'if-ok' || sourceHandle === 'if-nok') {
+    // Só pode conectar em uma turma (class-in)
+    if (!targetHandle.startsWith('class-in')) return false
+
+    // Se for 'if-ok', permite múltiplas conexões para balanceamento
+    if (sourceHandle === 'if-ok') {
+      return true
+    }
+
+    // Para 'if-nok', geralmente apenas uma saída, mas vamos manter a lógica de não duplicar arestas idênticas
+    // O Vue Flow já evita arestas idênticas por padrão se não configurado o contrário
+    return true
+  }
+
+  return false
+}
+
+function edgeStyle(kind: string, executionMode?: string) {
+  const base = {
+    stroke: edgeStroke(kind),
+    strokeWidth: 3,
+    strokeLinecap: 'round',
+    strokeLinejoin: 'round',
+    opacity: 0.92,
+  }
+  if (executionMode === 'recurring') {
+    return {...base, strokeDasharray: '6 6', strokeDashoffset: '0'}
+  }
+  return base
+}
+
+function getStartExecutionMode() {
+  const startNode = nodes.value.find((n) => n.type === 'start')
+  const mode = startNode?.data?.payload?.executionMode
+  return mode === 'recurring' ? 'recurring' : 'once'
+}
+
+function syncEdgesForStart() {
+  const mode = getStartExecutionMode()
+  setEdges(
+      edges.value.map((e) => {
+        const kind = e.data?.kind || edgeKindFromHandles(e.sourceHandle || '', e.targetHandle || '')
+        return {
+          ...e,
+          data: {...e.data, executionMode: mode},
+          style: edgeStyle(kind, mode),
+        }
+      }),
+  )
+  enforceContractCheckForConditions()
+}
+
+function handleConnect(params: Connection) {
+  if (!connectMode.value) return
+
+  const {source, target, sourceHandle, targetHandle} = params
+  if (!source || !target || !sourceHandle || !targetHandle) return
+
+  if (sourceHandle.startsWith('class-in') || sourceHandle === 'if-in') return
+  if (targetHandle.startsWith('class-out') || targetHandle === 'if-ok' || targetHandle === 'if-nok') return
+
+  const kind = edgeKindFromHandles(sourceHandle, targetHandle)
+  const id = uid()
+  const executionMode = getStartExecutionMode()
+  const style = edgeStyle(kind, executionMode)
+
+  const nextEdges = [
+    ...edges.value,
+    {
+      ...params,
+      id,
+      type: 'smooth',
+      style,
+      data: {kind, auto: false, executionMode},
+    },
+  ]
+
+  setEdges(nextEdges)
+  selectedEdgeId.value = null
+}
+
+function clampAttendance(value: unknown) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return 1
+  return Math.min(100, Math.max(1, n))
+}
+
+function sanitizeOneToHundred(value: unknown) {
+  const raw = String(value ?? '').replace(/\D+/g, '')
+  if (!raw) return {n: 1, text: '1'}
+  const trimmed = raw.slice(0, 3)
+  let n = Number(trimmed)
+  if (!Number.isFinite(n)) n = 1
+  n = Math.min(100, Math.max(1, n))
+  return {n, text: String(n)}
+}
+
+function updateSelectedCondition(patch: Partial<ConditionPayload>) {
+  if (!selectedNode.value || selectedNode.value.type !== 'condition') return
+  if (patch.evolutionMode) {
+    const mode = patch.evolutionMode
+    if (mode === 'none') {
+      patch = { ...patch, evolveAt: '', startDate: '', endDate: '', useClassEndDate: false }
+    } else if (mode === 'specific') {
+      patch = {
+        ...patch,
+        useClassEndDate: false,
+        startDate: '',
+        endDate: '',
+        evolveAt: patch.evolveAt ?? selectedNode.value.data?.payload?.evolveAt ?? '',
+      }
+    } else if (mode === 'range') {
+      patch = {
+        ...patch,
+        useClassEndDate: false,
+        evolveAt: '',
+        startDate: patch.startDate ?? selectedNode.value.data?.payload?.startDate ?? '',
+        endDate: patch.endDate ?? selectedNode.value.data?.payload?.endDate ?? '',
+      }
+    } else if (mode === 'classEnd') {
+      patch = { ...patch, useClassEndDate: true, evolveAt: '', startDate: '', endDate: '' }
+    }
+  }
+  setNodes(
+      nodes.value.map((n) =>
+          n.id !== selectedNode.value?.id
+              ? n
+              : {
+                ...n,
+                data: {
+                  ...n.data,
+                  payload: {...n.data?.payload, ...patch},
+                },
+              },
+      ),
+  )
+}
+
+function updateSelectedStart(patch: Partial<StartPayload>) {
+  if (!selectedNode.value || selectedNode.value.type !== 'start') return
+  setNodes(
+      nodes.value.map((n) =>
+          n.id !== selectedNode.value?.id
+              ? n
+              : {
+                ...n,
+                data: {
+                  ...n.data,
+                  payload: {...n.data?.payload, ...patch},
+                },
+              },
+      ),
+  )
+  if (patch.executionMode) {
+    syncEdgesForStart()
+  }
+}
+</script>
+
+<template>
+  <div class="flex h-full flex-col">
+    <div class="border-b bg-white px-4 py-3">
+      <div class="flex items-center justify-between gap-3">
+        <div class="flex items-center gap-2">
+          <Button size="sm" :variant="mainTab === 'workflow' ? 'secondary' : 'ghost'" @click="goToWorkflowTab">
+            Workflow
+          </Button>
+          <Button size="sm" :variant="mainTab === 'evolution' ? 'secondary' : 'ghost'" @click="goToEvolutionTab">
+            Evolucao dos Jovens
+          </Button>
+        </div>
+        <div class="flex items-center gap-2">
+          <div v-if="mainTab === 'workflow' && workflowMode === 'editor' && activeWorkflow"
+               class="text-xs text-slate-500">{{ activeWorkflow.name }}
+          </div>
+          <div v-if="mainTab === 'workflow' && workflowMode === 'editor'" class="flex items-center gap-2">
+            <Button size="sm" variant="outline" @click="backToList">Voltar</Button>
+            <Button size="sm" class="bg-blue-600 hover:bg-blue-700" @click="publishWorkflow">Publicar</Button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="flex-1 min-h-0 overflow-hidden">
+      <div v-if="mainTab === 'evolution'" class="relative h-full w-full">
+        <WorkflowGridPreview
+            v-if="activeWorkflow && nodes.length > 0"
+            :nodes="nodes"
+            :edges="edges"
+            :workflow-id="activeWorkflow.id ?? ''"
+        />
+        <div v-else class="flex h-full items-center justify-center text-sm text-slate-500">
+          Selecione um workflow para ver a evolucao dos jovens.
+        </div>
+      </div>
+
+      <div v-else class="h-full min-h-0">
+
+        <div v-if="workflowMode === 'list'" class="h-full overflow-auto">
+          <div class="mx-auto flex h-full w-full max-w-5xl flex-col gap-6 p-6">
+            <div class="flex items-center justify-between">
+              <div>
+                <div class="text-sm font-semibold text-slate-900">Workflows</div>
+                <div class="text-xs text-muted-foreground">Selecione um workflow existente ou crie um novo</div>
+              </div>
+              <Dialog v-model:open="createWorkflowOpen">
+                <DialogTrigger as-child>
+                  <Button size="sm" class="bg-blue-600 hover:bg-blue-700">Criar Workflow</Button>
+                </DialogTrigger>
+                <DialogContent class="sm:max-w-[520px]">
+                  <DialogHeader>
+                    <DialogTitle>Novo Workflow</DialogTitle>
+                    <DialogDescription>Informe os dados basicos para criar um workflow.</DialogDescription>
+                  </DialogHeader>
+                  <div class="grid gap-3 py-2">
+                    <div class="grid gap-1">
+                      <Label class="text-xs">Nome</Label>
+                      <Input v-model="newWorkflow.name" placeholder="Nome do workflow" class="h-9"/>
+                    </div>
+                    <div class="grid gap-1">
+                      <Label class="text-xs">Descricao</Label>
+                      <Textarea v-model="newWorkflow.description" class="min-h-[90px]"
+                                placeholder="Descreva o objetivo do workflow"/>
+                    </div>
+                    <div class="grid gap-1">
+                      <Label class="text-xs">Status</Label>
+                      <select v-model="newWorkflow.status"
+                              class="h-9 w-full rounded-md border border-slate-200 bg-white px-2 text-xs">
+                        <option v-for="opt in workflowStatusOptions" :key="opt.value" :value="opt.value">{{
+                            opt.label
+                          }}
+                        </option>
+                      </select>
+                    </div>
+                  </div>
+                  <DialogFooter>
+                    <Button size="sm" variant="outline" @click="createWorkflowOpen = false">Cancelar</Button>
+                    <Button size="sm" class="bg-blue-600 hover:bg-blue-700" @click="createWorkflow">Criar Workflow
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+            </div>
+
+            <div class="rounded-2xl border bg-white p-5 shadow-sm">
+              <div class="flex items-center justify-between gap-3 mb-3">
+                <div class="text-sm font-semibold text-slate-900">Lista de Workflows</div>
+                <Input v-model="workflowSearch" placeholder="Buscar workflow..." class="h-8 w-full max-w-[260px]"/>
+              </div>
+              <div v-if="apiWorkflows.length === 0" class="rounded-xl border border-dashed bg-slate-50 p-6 text-center">
+                <div class="text-sm font-semibold text-slate-600 mb-1">Nenhum workflow</div>
+                <div class="text-xs text-muted-foreground">Crie um workflow para comecar</div>
+              </div>
+              <div v-else-if="filteredWorkflows.length === 0"
+                   class="rounded-xl border border-dashed bg-slate-50 p-6 text-center">
+                <div class="text-sm font-semibold text-slate-600 mb-1">Sem resultados</div>
+                <div class="text-xs text-muted-foreground">Ajuste a busca para encontrar workflows</div>
+              </div>
+              <div v-else class="space-y-2">
+                <div v-for="wf in filteredWorkflows" :key="wf.id"
+                     class="group flex items-center justify-between rounded-xl border bg-white p-3 shadow-sm transition-all hover:border-blue-200 hover:shadow-md"
+                >
+                  <button
+                      type="button"
+                      class="min-w-0 flex-1 cursor-pointer self-stretch flex flex-col justify-center text-left"
+                      @click="loadWorkflow(wf)"
+                  >
+                    <div class="text-sm font-bold truncate text-slate-900 mb-0.5">{{ wf.name }}</div>
+                    <div class="text-[10px] text-muted-foreground line-clamp-2">{{
+                        wf.description || 'Sem descricao'
+                      }}
+                    </div>
+                    <div class="text-[10px] text-muted-foreground flex items-center gap-2">
+                      <span>ID: {{ wf.id }}</span>
+                      <span>-</span>
+                      <span>{{ wf.nodes?.length || 0 }} nos</span>
+                    </div>
+                  </button>
+                  <div class="flex items-center gap-2">
+                    <span
+                        class="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold"
+                        :class="workflowStatusMeta(wf.status).class"
+                    >
+                      {{ workflowStatusMeta(wf.status).label }}
+                    </span>
+                    <Button
+                        size="icon"
+                        variant="ghost"
+                        class="h-8 w-8 text-blue-600 hover:text-blue-700"
+                        title="Ver evolucao dos jovens"
+                        @pointerdown.stop
+                        @click.stop="openEvolutionWorkflow(wf)"
+                    >
+                      <Users class="h-4 w-4"/>
+                    </Button>
+                    <Button
+                        size="icon"
+                        variant="ghost"
+                        class="h-8 w-8"
+                        title="Editar workflow"
+                        @pointerdown.stop
+                        @click.stop="openEditWorkflow(wf)"
+                    >
+                      <Pencil class="h-4 w-4"/>
+                    </Button>
+                    <Button
+                        size="icon"
+                        variant="ghost"
+                        class="h-8 w-8 text-rose-600 hover:text-rose-700"
+                        title="Excluir workflow"
+                        @pointerdown.stop
+                        @click.stop="deleteWorkflow(wf)"
+                    >
+                      <Trash2 class="h-4 w-4"/>
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <Dialog v-model:open="editWorkflowOpen">
+              <DialogContent class="sm:max-w-[520px]">
+                <DialogHeader>
+                  <DialogTitle>Editar Workflow</DialogTitle>
+                  <DialogDescription>Atualize o nome, descricao e status do workflow.</DialogDescription>
+                </DialogHeader>
+                <div v-if="editWorkflow" class="grid gap-3 py-2">
+                  <div class="grid gap-1">
+                    <Label class="text-xs">Nome</Label>
+                    <Input v-model="editWorkflow.name" placeholder="Nome do workflow" class="h-9"/>
+                  </div>
+                  <div class="grid gap-1">
+                    <Label class="text-xs">Descricao</Label>
+                    <Textarea v-model="editWorkflow.description" class="min-h-[90px]"
+                              placeholder="Descreva o objetivo do workflow"/>
+                  </div>
+                  <div class="grid gap-1">
+                    <Label class="text-xs">Status</Label>
+                    <select v-model="editWorkflow.status"
+                            class="h-9 w-full rounded-md border border-slate-200 bg-white px-2 text-xs">
+                      <option v-for="opt in workflowStatusOptions" :key="opt.value" :value="opt.value">{{
+                          opt.label
+                        }}
+                      </option>
+                    </select>
+                  </div>
+                </div>
+                <DialogFooter>
+                  <Button size="sm" variant="outline" @click="editWorkflowOpen = false">Cancelar</Button>
+                  <Button size="sm" class="bg-blue-600 hover:bg-blue-700" @click="saveEditWorkflow">Salvar</Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+          </div>
+        </div>
+        <div v-else class="grid h-full min-h-0 grid-cols-[320px_1fr_300px] gap-0 border rounded-2xl overflow-hidden">
+          <div class="h-full bg-muted/30 border-r min-h-0 overflow-hidden">
+
+            <ScrollArea class="h-full w-full">
+              <div class="p-4">
+                <div class="mb-3 flex items-center justify-between">
+                  <div class="text-sm font-semibold">Cursos</div>
+                  <div class="flex items-center gap-2">
+                    <div
+                        class="h-2 w-2 rounded-full"
+                        :class="apiOnline ? 'bg-emerald-500' : 'bg-orange-500'"
+                        :title="apiOnline ? 'API Online' : 'API Offline (Demo Mode)'"
+                    ></div>
+                    <span
+                        class="inline-flex items-center rounded-full border border-slate-200 bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-700"
+                    >
+                    vueflow
+                  </span>
+                  </div>
+                </div>
+
+                <div class="space-y-2">
+                  <Input v-model="query" placeholder="Buscar..."/>
+                  <div class="flex gap-2">
+                    <Button size="sm" variant="secondary" class="flex-1" @click="addStartNode">
+                      <Play class="mr-2 h-4 w-4"/>
+                      Inicio
+                    </Button>
+                    <Button size="sm" variant="secondary" class="flex-1" @click="addConditionNode">
+                      <Plus class="mr-2 h-4 w-4"/>
+                      Condicao
+                    </Button>
+                    <Button size="sm" variant="secondary" title="Export JSON" @click="exportJson">
+                      <Save class="h-4 w-4"/>
+                    </Button>
+                  </div>
+                </div>
+
+                <div class="my-4 h-px w-full bg-border"/>
+
+                <div class="flex items-center justify-between">
+                  <div class="flex items-center gap-2">
+                    <Switch
+                        :checked="connectMode"
+                        @update:checked="(value) => {
+                      connectMode = value
+                      selectedEdgeId = null
+                    }"
+                    />
+                    <Label class="text-xs">Modo conectar</Label>
+                  </div>
+                  <Button size="sm" variant="ghost" title="Limpar conexoes" @click="clearConnections">
+                    <Unlink class="h-4 w-4"/>
+                  </Button>
+                </div>
+
+                <div class="mt-2 space-y-2 text-xs text-muted-foreground">
+                  <div class="flex items-center gap-2">
+                    <Link2 class="h-3 w-3"/>
+                    <span>
+                    {{
+                        connectMode
+                            ? 'Conecte Turmas apenas em Condições, e Condições apenas em Turmas.'
+                            : 'Ative o modo conectar para criar conexoes.'
+                      }}
+                  </span>
+                  </div>
+                  <div v-if="connectMode" class="text-[11px] text-muted-foreground">
+                    IF tem duas saidas: OK (verde) e NOK (vermelha).
+                  </div>
+                </div>
+
+                <div class="my-4 h-px w-full bg-border"/>
+
+                <div class="space-y-2">
+                  <div
+                      v-for="c in courses"
+                      :key="c.id"
+                      class="rounded-2xl border bg-background shadow-sm overflow-hidden"
+                  >
+                    <div class="relative flex items-start gap-4 px-4 py-3 bg-gray-100"
+                         style="min-height: 67px;">
+                      <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-gray-200 backdrop-blur-sm">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"
+                             stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                             class="lucide lucide-graduation-cap-icon h-6 w-6 text-gray-400">
+                          <path d="M22 10v6M2 10l10-5 10 5-10 5z"></path>
+                          <path d="M6 12v5c3 3 9 3 12 0v-5"></path>
+                        </svg>
+                      </div>
+                      <div class="min-w-0 flex-1 pt-0.5">
+                        <div class=" text-[9px] font-semibold uppercase tracking-wide text-gray-500"> Curso</div>
+                        <h3 class="text-[12px] font-semibold leading-tight text-gray-500 line-clamp-2"
+                            title="{{ c.name }}">{{ c.name }}</h3></div>
+                    </div>
+                    <div
+                        class="flex items-center justify-between border-b border-slate-100 bg-gradient-to-br from-slate-50 to-white px-5 py-3"
+                        style="height: 56px;">
+                      <div class="space-y-1">
+                        <div class="text-[9px] font-medium uppercase tracking-wide text-slate-500"> Total de
+                          Aprendizes
+                        </div>
+                        <div class="flex items-baseline gap-2"><span
+                            class="text-1xl font-bold text-slate-600">{{
+                            (classesByCourse[c.id] || []).reduce((acc, curr) => acc + (curr.stats?.total || 0), 0)
+                          }}</span><span class="text-sm text-slate-500">Aprendizes</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="flex items-center justify-between gap-2 p-3">
+                      <button
+                          class="flex items-center gap-2 text-left"
+                          type="button"
+                          @click="toggleExpanded(c.id)"
+                      >
+                        <component :is="expandedCourses.has(c.id) ? ChevronDown : ChevronRight" class="h-4 w-4"/>
+                        <div>
+                          <div class="flex items-center gap-1.5 text-[12px] text-muted-foreground">
+                            <span>Selecionar turmas</span>
+                          </div>
+                        </div>
+                      </button>
+
+                      <div class="flex items-center gap-2">
+                      <span
+                          class="inline-flex items-center rounded-full border border-slate-200 bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-700"
+                          title="Turmas selecionadas"
+                      >
+                        {{ preselect[c.id]?.size || 0 }}
+                      </span>
+
+                        <div
+                            class="cursor-grab select-none rounded-xl border px-3 py-1 text-xs active:cursor-grabbing"
+                            :class="preselect[c.id]?.size ? '' : 'opacity-50'"
+                            :draggable="!!preselect[c.id]?.size"
+                            :title="preselect[c.id]?.size ? 'Arraste' : 'Selecione pelo menos 1 turma'"
+                            @dragstart="(event) => {
+                          if (!preselect[c.id]?.size) return
+                          onDragStartCourse(event, c.id)
+                        }"
+                        >
+                          Arrastar
+                        </div>
+
+                        <Button
+                            size="sm"
+                            variant="ghost"
+                            :disabled="!preselect[c.id]?.size"
+                            :title="preselect[c.id]?.size ? 'Adicionar' : 'Selecione turmas'"
+                            @click="() => {
+                          if (!preselect[c.id]?.size) return
+                          addCourseNode(c.id, { x: 80, y: 80 })
+                        }"
+                        >
+                          <Plus class="h-4 w-4"/>
+                        </Button>
+                      </div>
+                    </div>
+
+                    <div v-if="expandedCourses.has(c.id)" class="px-3 pb-3">
+                      <div class="mb-2 flex items-center justify-between gap-2">
+                        <div class="text-xs font-semibold">Turmas:</div>
+                        <Button
+                            size="sm"
+                            variant="ghost"
+                            class="h-7 px-2 text-[10px]"
+                            :disabled="!(classesByCourse[c.id]?.length) || (preselect[c.id]?.size || 0) === (classesByCourse[c.id] || []).length"
+                            @click="selectAllCourseClasses(c.id)"
+                        >
+                          {{
+                            (classesByCourse[c.id]?.length || 0) > 0 &&
+                            (preselect[c.id]?.size || 0) === (classesByCourse[c.id] || []).length
+                                ? 'Todas selecionadas'
+                                : 'Selecionar todas'
+                          }}
+                        </Button>
+                      </div>
+                      <div class="space-y-2">
+                        <div
+                            v-for="cls in classesByCourse[c.id] || []"
+                            :key="cls.id"
+                            class="flex items-center justify-between gap-2 rounded-xl border bg-slate-50/50 px-3 py-2"
+                        >
+                          <div class="flex items-center gap-2 min-w-0 flex-1">
+                            <input
+                                type="checkbox"
+                                :checked="preselect[c.id]?.has(cls.id) || false"
+                                @change="(event) => togglePreselect(c.id, cls.id, (event.target as HTMLInputElement).checked)"
+                                class="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                            />
+                            <div class="min-w-0 flex-1">
+                              <div class="text-[13px] font-semibold truncate text-slate-800">{{ cls.name }}</div>
+                              <div class="flex items-center gap-2 text-[10px] text-muted-foreground mt-0.5">
+                              <span class="flex items-center gap-0.5" title="Total de aprendizes">
+                                <Users class="h-3 w-3"/>
+                                {{ cls.stats?.total || 0 }}
+                              </span>
+                                <span v-if="cls.stats" class="flex gap-1.5 border-l pl-2 border-slate-200">
+                                <span title="Homens">H: {{ cls.stats.men }}</span>
+                                <span title="Mulheres">M: {{ cls.stats.women }}</span>
+                                <span title="Outros">O: {{ cls.stats.others }}</span>
+                                  <span
+                                      v-if="cls.dayOfWeek"
+                                      class="whitespace-nowrap rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[7px] text-slate-700 font-medium"
+                                  >
+                              {{ formatDayOfWeek(cls.dayOfWeek) }}
+                            </span>
+                              </span>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div class="flex gap-2 shrink-0  flex-col items-end ">
+                            <span
+                                v-if="onlyWithContractFlag(cls)"
+                                class="whitespace-nowrap rounded-full border border-orange-100 bg-orange-50 px-2 py-0.5 text-[7px] text-orange-700 font-medium"
+                            >
+                              Contrato
+                            </span>
+                            <span
+                                v-else
+                                class="whitespace-nowrap rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[7px] text-slate-600 font-medium"
+                            >
+                              Livre
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                      <div class="mt-2 text-[11px] text-muted-foreground">
+                        Exemplo: "matriculados do Curso X / Turma X1 -> Curso Y / Turma Y3".
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </ScrollArea>
+          </div>
+
+
+          <div class="relative h-full min-h-0" ref="flowWrapper" @drop="handleDrop" @dragover="handleDragOver">
+            <div class="relative h-full">
+              <VueFlow
+                  :id="flowId"
+                  :nodes="nodes"
+                  :edges="edges"
+                  :node-types="nodeTypes"
+                  :edge-types="edgeTypes"
+                  :min-zoom="0.45"
+                  :max-zoom="2.2"
+                  :default-edge-options="{ type: 'smooth' }"
+                  :is-valid-connection="isValidConnection"
+                  class="h-full w-full bg-[radial-gradient(circle_at_1px_1px,rgba(148,163,184,0.35)_1px,transparent_0)] bg-[length:22px_22px]"
+                  @connect="handleConnect"
+              >
+                <template #connection-line="{ sourceX, sourceY, targetX, targetY }">
+                  <CustomConnectionLine :source-x="sourceX" :source-y="sourceY" :target-x="targetX"
+                                        :target-y="targetY"/>
+                </template>
+                <Background :gap="22" :size="1"/>
+                <Controls class="z-10 pointer-events-auto" position="top-right" :show-fit-view="true" :show-zoom="true"
+                          :show-interactive="true"/>
+              </VueFlow>
+
+              <div v-if="nodes.length === 0"
+                   class="pointer-events-none absolute inset-0 flex items-center justify-center">
+                <div
+                    class="pointer-events-auto rounded-3xl border-2 border-dashed border-slate-300 bg-white p-8 shadow-xl">
+                  <div class="text-center">
+                    <div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-100">
+                      <Plus class="h-6 w-6 text-blue-600"/>
+                    </div>
+                    <div class="text-sm font-bold text-slate-900 mb-1">Solte um curso aqui</div>
+                    <div class="text-xs text-muted-foreground max-w-[240px]">
+                      Selecione turmas na sidebar e arraste o curso para comecar
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="h-full bg-muted/30 border-l p-4 overflow-auto min-h-0">
+
+            <div v-if="activeWorkflow" class="mb-4 rounded-2xl border bg-white shadow-sm">
+              <div class="p-4">
+                <div class="flex items-center justify-between gap-3">
+                  <div>
+                    <div class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Workflow</div>
+                    <div class="text-sm font-bold text-slate-900">{{ activeWorkflow.name }}</div>
+                  </div>
+                  <span
+                      class="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold"
+                      :class="workflowStatusMeta(activeWorkflow.status).class"
+                  >
+              {{ workflowStatusMeta(activeWorkflow.status).label }}
+            </span>
+                </div>
+              </div>
+            </div>
+            <div class="mb-3 flex items-center justify-between">
+              <div class="text-sm font-semibold">Configuracao</div>
+              <span
+                  class="inline-flex items-center rounded-full border border-slate-200 bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-700"
+              >
+          {{
+                  selectedNode ? (selectedNode.type === 'condition' ? 'IF' : selectedNode.type === 'start' ? 'INICIO' : 'CURSO') : '-'
+                }}
+        </span>
+            </div>
+
+            <div v-if="!selectedNode" class="rounded-2xl border bg-white shadow-sm">
+              <div class="p-4 text-sm text-muted-foreground">Selecione um node no canvas para configurar.</div>
+            </div>
+            <div v-else-if="selectedNode.type === 'course'" class="rounded-2xl border bg-white shadow-sm">
+              <div class="space-y-2 p-4">
+                <div class="text-sm font-semibold">Curso {{ selectedNode.data?.payload?.courseName }}</div>
+                <div class="text-xs text-muted-foreground">
+                  Turmas no card: <b>{{ selectedNode.data?.payload?.classes?.length || 0 }}</b>
+                </div>
+                <div class="text-xs text-muted-foreground">
+                  Use as conexoes por turma para dizer exatamente quem sai (ex.: X1) e quem entra (ex.: Y3).
+                </div>
+              </div>
+            </div>
+            <div v-else-if="selectedNode.type === 'start'" class="rounded-2xl border bg-white shadow-sm">
+              <div class="space-y-3 p-4">
+                <div class="text-sm font-semibold">Configuracao do Inicio</div>
+
+                <div class="space-y-2 rounded-xl border p-3">
+                  <div>
+                    <div class="text-xs font-semibold">Execucao do workflow</div>
+                    <div class="text-[11px] text-muted-foreground">Defina se a execucao e unica ou recorrente</div>
+                  </div>
+                  <div class="grid gap-2 pt-1">
+                    <label
+                        v-for="opt in EXECUTION_MODE_OPTIONS"
+                        :key="opt.value"
+                        class="flex items-center gap-2 rounded-lg border bg-white p-2 cursor-pointer hover:bg-slate-50"
+                    >
+                      <input
+                          type="radio"
+                          :name="`exec-mode-${selectedNode.id}`"
+                          :value="opt.value"
+                          :checked="selectedNode.data?.payload?.executionMode === opt.value"
+                          @change="() => updateSelectedStart({ executionMode: opt.value })"
+                      />
+                      <span class="text-[11px] text-slate-900">{{ opt.label }}</span>
+                    </label>
+                  </div>
+                </div>
+
+                <div class="space-y-2 rounded-xl border p-3">
+                  <div>
+                    <div class="text-xs font-semibold">Periodo de execucao</div>
+                    <div class="text-[11px] text-muted-foreground">Inicie em uma data ou defina um intervalo</div>
+                  </div>
+                  <div class="grid grid-cols-1 gap-2 pt-1">
+                    <div class="space-y-1">
+                      <Label class="text-[11px]">Data inicio</Label>
+                      <DatePicker
+                          :model-value="selectedNode.data?.payload?.startDate"
+                          @update:model-value="(val) => updateSelectedStart({ startDate: String(val) })"
+                      />
+                    </div>
+                    <div class="space-y-1">
+                      <Label class="text-[11px]">Data termino</Label>
+                      <DatePicker
+                          :model-value="selectedNode.data?.payload?.endDate"
+                          :class="selectedNode.data?.payload?.executionMode === 'once' && !selectedNode.data?.payload?.endDate ? 'border-rose-300' : ''"
+                          @update:model-value="(val) => updateSelectedStart({ endDate: String(val) })"
+                      />
+                      <div
+                          v-if="selectedNode.data?.payload?.executionMode === 'once' && !selectedNode.data?.payload?.endDate"
+                          class="text-[10px] text-rose-600"
+                      >
+                        Informe a data de termino para execucao unica.
+                      </div>
+                    </div>
+                    <div v-if="selectedNode.data?.payload?.executionMode === 'recurring'" class="space-y-1">
+                      <Label class="text-[11px]">Horario diario</Label>
+                      <Input
+                          type="time"
+                          step="60"
+                          :model-value="selectedNode.data?.payload?.runDailyAt"
+                          @update:model-value="(val) => updateSelectedStart({ runDailyAt: String(val) })"
+                      />
+                      <div class="text-[10px] text-muted-foreground">
+                        Execucao diaria no horario definido.
+                      </div>
+                    </div>
+                    <div v-if="selectedNode.data?.payload?.executionMode === 'recurring'" class="space-y-1">
+                      <Label class="text-[11px]">Repetir a cada</Label>
+                      <select
+                          class="h-9 w-full rounded-md border border-slate-200 bg-white px-2 text-xs"
+                          :value="selectedNode.data?.payload?.runIntervalMinutes === null ? '' : String(selectedNode.data?.payload?.runIntervalMinutes)"
+                          @change="(e) => {
+                      const value = (e.target as HTMLSelectElement).value
+                      updateSelectedStart({ runIntervalMinutes: value ? Number(value) : null })
+                    }"
+                      >
+                        <option v-for="opt in repeatIntervalOptions" :key="opt.value" :value="opt.value">{{
+                            opt.label
+                          }}
+                        </option>
+                      </select>
+                      <div class="text-[10px] text-muted-foreground">
+                        Se definido, repete durante o dia no intervalo escolhido.
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="text-[11px] text-slate-600">
+                  Conecte o inicio a uma turma ou condicao para definir onde o fluxo comeca.
+                </div>
+              </div>
+            </div>
+            <div v-else-if="selectedNode.type === 'condition'" class="rounded-2xl border bg-white shadow-sm">
+              <div v-if="conditionDetailsOpenId === selectedNode.id" class="space-y-3 p-4">
+                <div class="text-sm font-semibold">Configuração da Condição</div>
+
+                <!-- Aulas Completas -->
+                <div class="space-y-2 rounded-xl border p-3">
+                  <div class="flex items-center justify-between">
+                    <div>
+                      <div class="text-xs font-semibold">Aulas completas</div>
+                      <div class="text-[11px] text-muted-foreground">Frequência mínima exigida</div>
+                    </div>
+                    <Switch
+                        :checked="!!selectedNode.data?.payload?.hasAttendance"
+                        @update:checked="(val) => updateSelectedCondition({ hasAttendance: val })"
+                    />
+                  </div>
+                  <div v-if="selectedNode.data?.payload?.hasAttendance" class="space-y-1 pt-2">
+                    <Label class="text-[11px]">Porcentagem de aulas (%)</Label>
+                    <Input
+                        type="number"
+                        min="1"
+                        max="100"
+                        step="1"
+                        inputmode="numeric"
+                        pattern="[0-9]*"
+                        :model-value="selectedNode.data?.payload?.minAttendance"
+                        @input="(e) => {
+                    const target = e.target as HTMLInputElement
+                    const { n, text } = sanitizeOneToHundred(target?.value)
+                    if (target) target.value = text
+                    updateSelectedCondition({ minAttendance: n })
+                  }"
+                    />
+                    <div class="flex items-center gap-2 mt-2">
+                      <Switch
+                          id="must-complete"
+                          :checked="!!selectedNode.data?.payload?.mustCompleteLessons"
+                          @update:checked="(val) => updateSelectedCondition({ mustCompleteLessons: val })"
+                      />
+                      <Label for="must-complete" class="text-[11px]">Exigir todas as aulas</Label>
+                    </div>
+                  </div>
+                </div>
+
+          <!-- Nota Mínima -->
+          <div class="space-y-2 rounded-xl border p-3">
+            <div class="flex items-center justify-between">
+              <div>
+                <div class="text-xs font-semibold">Nota Mínima</div>
+                <div class="text-[11px] text-muted-foreground">Média mínima estipulada</div>
+              </div>
+              <Switch
+                  :checked="!!selectedNode.data?.payload?.hasMinGrade"
+                  @update:checked="(val) => updateSelectedCondition({ hasMinGrade: val })"
+              />
+            </div>
+            <div v-if="selectedNode.data?.payload?.hasMinGrade" class="space-y-1 pt-2">
+              <Label class="text-[11px]">Média mínima</Label>
+              <Input
+                  type="number"
+                  min="1"
+                  max="100"
+                  step="1"
+                  inputmode="numeric"
+                  pattern="[0-9]*"
+                  :model-value="selectedNode.data?.payload?.minExamGrade"
+                  @input="(e) => {
+                    const target = e.target as HTMLInputElement
+                    const { n, text } = sanitizeOneToHundred(target?.value)
+                    if (target) target.value = text
+                    updateSelectedCondition({ minExamGrade: n })
+                  }"
+              />
+            </div>
+          </div>
+
+          <!-- Evolução por Data -->
+          <div class="space-y-2 rounded-xl border p-3">
+            <div>
+              <div class="text-xs font-semibold">Evolução por data</div>
+              <div class="text-[11px] text-muted-foreground">Defina quando esta condição deve evoluir</div>
+            </div>
+            <div class="space-y-2 pt-1">
+              <div class="space-y-1">
+                <Label class="text-[11px]">Tipo de evolução</Label>
+                <select
+                    class="h-9 w-full rounded-md border border-slate-200 bg-white px-2 text-xs"
+                    :value="selectedNode.data?.payload?.evolutionMode || 'none'"
+                    @change="(e) => updateSelectedCondition({ evolutionMode: (e.target as HTMLSelectElement).value as any })"
+                >
+                  <option value="none">Sem data (segue execução do workflow)</option>
+                  <option value="specific">Data específica</option>
+                  <option value="range">Período (início/fim)</option>
+                  <option value="classEnd">Término da turma</option>
+                </select>
+              </div>
+
+              <div v-if="selectedNode.data?.payload?.evolutionMode === 'specific'" class="space-y-1">
+                <Label class="text-[11px]">Evoluir em</Label>
+                <DatePicker
+                    :model-value="selectedNode.data?.payload?.evolveAt"
+                    @update:model-value="(val) => updateSelectedCondition({ evolveAt: String(val) })"
+                />
+                <div v-if="!selectedNode.data?.payload?.evolveAt" class="text-[10px] text-rose-600">
+                  Informe a data específica de evolução.
+                </div>
+              </div>
+
+              <div v-if="selectedNode.data?.payload?.evolutionMode === 'range'" class="space-y-2">
+                <div class="space-y-1">
+                  <Label class="text-[11px]">Data início</Label>
+                  <DatePicker
+                      :model-value="selectedNode.data?.payload?.startDate"
+                      @update:model-value="(val) => updateSelectedCondition({ startDate: String(val) })"
+                  />
+                </div>
+                <div class="space-y-1">
+                  <Label class="text-[11px]">Data término</Label>
+                  <DatePicker
+                      :model-value="selectedNode.data?.payload?.endDate"
+                      @update:model-value="(val) => updateSelectedCondition({ endDate: String(val) })"
+                  />
+                </div>
+              </div>
+
+              <div
+                  v-if="selectedNode.data?.payload?.evolutionMode === 'classEnd'"
+                  class="text-[10px] text-blue-700 bg-blue-50 border border-blue-200 rounded-lg p-2"
+              >
+                A evolução ocorrerá no término da turma (endedAt).
+              </div>
+            </div>
+          </div>
+
+                <!-- Checar Contrato -->
+                <div class="space-y-2 rounded-xl border p-3">
+                  <div class="flex items-center justify-between">
+                    <div>
+                      <div class="text-xs font-semibold">Checar Contrato</div>
+                      <div class="text-[11px] text-muted-foreground">Validar status do contrato</div>
+                    </div>
+                    <Switch
+                        :checked="selectedConditionRequiresContract ? true : !!selectedNode.data?.payload?.checkContract"
+                        :disabled="selectedConditionRequiresContract"
+                        @update:checked="(val) => {
+                    if (selectedConditionRequiresContract) return
+                    updateSelectedCondition({ checkContract: val })
+                  }"
+                    />
+                  </div>
+                  <div
+                      v-if="selectedConditionRequiresContract"
+                      class="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2"
+                  >
+                    Obrigatorio para turmas com contrato.
+                  </div>
+                  <div v-if="selectedNode.data?.payload?.checkContract" class="space-y-2 pt-2">
+                    <Label class="text-[11px]">Status do contrato (selecione um ou mais)</Label>
+                    <div class="space-y-1">
+                      <div
+                          v-for="opt in CONTRACT_STATUS_OPTIONS"
+                          :key="opt.value"
+                          class="flex items-center gap-2 rounded-lg border p-2"
+                      >
+                        <input
+                            type="checkbox"
+                            :id="`status-${opt.value}`"
+                            :checked="selectedNode.data?.payload?.contractStatus?.includes(opt.value)"
+                            @change="(e) => {
+                        const checked = (e.target as HTMLInputElement).checked
+                        const current = [...(selectedNode?.data?.payload?.contractStatus || [])]
+                        if (checked) {
+                          if (!current.includes(opt.value)) current.push(opt.value)
+                        } else {
+                          const idx = current.indexOf(opt.value)
+                          if (idx !== -1) current.splice(idx, 1)
+                        }
+                        updateSelectedCondition({ contractStatus: current })
+                      }"
+                        />
+                        <Label :for="`status-${opt.value}`" class="text-[11px] cursor-pointer flex-1">{{
+                            opt.label
+                          }}</Label>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Manter dia da semana -->
+                <div class="space-y-2 rounded-xl border p-3">
+                  <div class="flex items-center justify-between">
+                    <div>
+                      <div class="text-xs font-semibold">Manter dia da semana</div>
+                      <div class="text-[11px] text-muted-foreground">Evoluir para turmas com o mesmo dia</div>
+                    </div>
+                    <Switch
+                        :checked="!!selectedNode.data?.payload?.keepSameDayOfWeek"
+                        @update:checked="(val) => updateSelectedCondition({ keepSameDayOfWeek: val })"
+                    />
+                  </div>
+                  <div class="text-[10px] text-muted-foreground">
+                    Ex: SEGUNDA -> SEGUNDA. Aplica-se principalmente a turmas de empresa.
+                  </div>
+                </div>
+
+
+                <!-- Status na Turma -->
+                <div class="space-y-2 rounded-xl border p-3">
+                  <div>
+                    <div class="text-xs font-semibold">Status na Turma</div>
+                    <div class="text-[11px] text-muted-foreground">Status ao sair e ao entrar na turma</div>
+                  </div>
+                  <div class="space-y-2 pt-1">
+                    <div class="space-y-1">
+                      <Label class="text-[11px]">Checar status na turma</Label>
+                      <select
+                          class="h-9 w-full rounded-md border border-slate-200 bg-white px-2 text-xs"
+                          :value="selectedNode.data?.payload?.classCheckStatus || ''"
+                          @change="(e) => updateSelectedCondition({ classCheckStatus: (e.target as HTMLSelectElement).value })"
+                      >
+                        <option value="">Nao filtrar</option>
+                        <option v-for="opt in CLASS_INSERT_STATUS_OPTIONS" :key="opt.value" :value="opt.value">
+                          {{ opt.label }}
+                        </option>
+                      </select>
+                      <div class="text-[10px] text-muted-foreground">
+                        A condicao so considera matriculados com este status.
+                      </div>
+                    </div>
+                    <div class="space-y-1">
+                      <Label class="text-[11px]">Status na turma atual</Label>
+                      <select
+                          class="h-9 w-full rounded-md border border-slate-200 bg-white px-2 text-xs"
+                          :value="selectedNode.data?.payload?.classExitStatus || ''"
+                          @change="(e) => updateSelectedCondition({ classExitStatus: (e.target as HTMLSelectElement).value })"
+                      >
+                        <option value="">Nao definir</option>
+                        <option v-for="opt in CLASS_INSERT_STATUS_OPTIONS" :key="opt.value" :value="opt.value">
+                          {{ opt.label }}
+                        </option>
+                      </select>
+                    </div>
+                    <div class="space-y-1">
+                      <Label class="text-[11px]">Status na turma destino</Label>
+                      <select
+                          class="h-9 w-full rounded-md border border-slate-200 bg-white px-2 text-xs"
+                          :value="selectedNode.data?.payload?.classInsertStatus || ''"
+                          @change="(e) => updateSelectedCondition({ classInsertStatus: (e.target as HTMLSelectElement).value })"
+                      >
+                        <option value="">Nao definir</option>
+                        <option v-for="opt in CLASS_INSERT_STATUS_OPTIONS" :key="opt.value" :value="opt.value">
+                          {{ opt.label }}
+                        </option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Balanceamento de Carga -->
+                <div class="space-y-2 rounded-xl border p-3">
+                  <div class="flex items-center justify-between">
+                    <div>
+                      <div class="text-xs font-semibold">Equilibrar Turmas</div>
+                      <div class="text-[11px] text-muted-foreground">Distribuir aprendizes entre saídas OK</div>
+                    </div>
+                    <Switch
+                        :checked="!!selectedNode.data?.payload?.isBalanced"
+                        @update:checked="(val) => updateSelectedCondition({ isBalanced: val })"
+                    />
+                  </div>
+                  <div v-if="selectedNode.data?.payload?.isBalanced" class="mt-3 space-y-3">
+                    <div class="text-[10px] text-blue-600 bg-blue-50 p-2 rounded-lg border border-blue-100">
+                      <p class="font-bold mb-1">Regras de Balanceamento:</p>
+                      <ul class="list-disc pl-3 space-y-1">
+                        <li><b>Round Robin:</b> Distribuição cíclica entre as turmas de destino.</li>
+                        <li><b>Proporcionalidade:</b> Mantém o equilíbrio de gênero (H/M/O) conforme as vagas
+                          disponíveis.
+                        </li>
+                        <li><b>Capacidade:</b> Prioriza turmas com menor lotação atual.</li>
+                      </ul>
+                    </div>
+
+                    <div class="space-y-1.5 border-t pt-2">
+                      <Label class="text-[11px]">Critérios de Balanceamento (pode escolher ambos)</Label>
+                      <div class="grid grid-cols-1 gap-1.5">
+                        <label
+                            class="flex items-center gap-2 p-2 rounded border bg-white cursor-pointer hover:bg-slate-50">
+                          <input
+                              type="checkbox"
+                              :checked="selectedNode.data?.payload?.balanceStrategy?.includes('occupancy')"
+                              @change="(e) => {
+                        const checked = (e.target as HTMLInputElement).checked
+                        const current = [...(selectedNode.data?.payload?.balanceStrategy || [])]
+                        if (checked) {
+                          if (!current.includes('occupancy')) current.push('occupancy')
+                        } else {
+                          const idx = current.indexOf('occupancy')
+                          if (idx !== -1) current.splice(idx, 1)
+                        }
+                        updateSelectedCondition({ balanceStrategy: current })
+                      }"
+                              class="h-3 w-3"
+                          />
+                          <span class="text-[10px]">Menor Ocupação Geral</span>
+                        </label>
+                        <label
+                            class="flex items-center gap-2 p-2 rounded border bg-white cursor-pointer hover:bg-slate-50">
+                          <input
+                              type="checkbox"
+                              :checked="selectedNode.data?.payload?.balanceStrategy?.includes('gender')"
+                              @change="(e) => {
+                        const checked = (e.target as HTMLInputElement).checked
+                        const current = [...(selectedNode.data?.payload?.balanceStrategy || [])]
+                        if (checked) {
+                          if (!current.includes('gender')) current.push('gender')
+                        } else {
+                          const idx = current.indexOf('gender')
+                          if (idx !== -1) current.splice(idx, 1)
+                        }
+                        updateSelectedCondition({ balanceStrategy: current })
+                      }"
+                              class="h-3 w-3"
+                          />
+                          <span class="text-[10px]">Equilíbrio de Gênero (H/M/O)</span>
+                        </label>
+                      </div>
+                    </div>
+
+                    <div class="p-2 bg-amber-50 rounded-lg border border-amber-100 text-[10px] text-amber-700">
+                      <b>Nota:</b> O balanceamento só será aplicado se houver mais de uma conexão na saída "Sim".
+                    </div>
+                  </div>
+                </div>
+
+                <div class="text-[11px] text-muted-foreground mt-4">
+                  Saidas do IF:
+                  <span class="ml-1 inline-flex items-center rounded-full border px-2 py-0.5 text-[11px]"
+                        :class="portColor('ok')">Sim (OK)</span>
+                  e
+                  <span class="ml-1 inline-flex items-center rounded-full border px-2 py-0.5 text-[11px]"
+                        :class="portColor('nok')">Não (NOK)</span>
+                </div>
+              </div>
+              <div v-else class="p-4 text-sm text-muted-foreground text-center">
+                <div class="mb-2">Clique duas vezes no nó de condição no canvas para abrir as configurações.</div>
+                <Button size="sm" variant="outline" @click="toggleConditionDetails(selectedNode.id)">
+                  Abrir Configurações
+                </Button>
+              </div>
+            </div>
+
+            <div class="my-4 h-px w-full bg-border"/>
+
+            <div class="rounded-2xl border bg-white shadow-sm">
+              <div class="p-4">
+                <div class="text-xs font-semibold">Como editar conexoes</div>
+                <div class="mt-2 space-y-1 text-xs text-muted-foreground">
+                  <div>- Ative Modo conectar.</div>
+                  <div>- Arraste do ponto de saida ate a entrada.</div>
+                  <div>- Clique na linha para remover.</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<style>
+@import '@vue-flow/core/dist/style.css';
+@import '@vue-flow/core/dist/theme-default.css';
+@import '@vue-flow/controls/dist/style.css';
+</style>
+
