@@ -140,7 +140,7 @@ const START_Y = HEADER_H + STATS_H + SECTION_HEADER_H + PAD_TOP +15
           </div>
           <div class="flex items-baseline gap-2">
             <span class="text-2xl font-bold text-slate-900">
-              {{ data.payload.classes.reduce((sum, cls) => sum + (cls.stats?.total || 0), 0) }}
+              {{ (data.payload?.classes || []).reduce((sum, cls) => sum + (cls.stats?.total || 0), 0) }}
             </span>
             <span class="text-sm text-slate-500">aprendizes</span>
           </div>
@@ -150,21 +150,21 @@ const START_Y = HEADER_H + STATS_H + SECTION_HEADER_H + PAD_TOP +15
           <div class="flex items-center gap-1.5">
             <div class="h-2.5 w-2.5 rounded-full bg-blue-500"></div>
             <span class="font-medium text-slate-700">
-              {{ data.payload.classes.reduce((sum, cls) => sum + (cls.stats?.men || 0), 0) }}
+              {{ (data.payload?.classes || []).reduce((sum, cls) => sum + (cls.stats?.men || 0), 0) }}
             </span>
             <span class="text-slate-500">H</span>
           </div>
           <div class="flex items-center gap-1.5">
             <div class="h-2.5 w-2.5 rounded-full bg-pink-500"></div>
             <span class="font-medium text-slate-700">
-              {{ data.payload.classes.reduce((sum, cls) => sum + (cls.stats?.women || 0), 0) }}
+              {{ (data.payload?.classes || []).reduce((sum, cls) => sum + (cls.stats?.women || 0), 0) }}
             </span>
             <span class="text-slate-500">M</span>
           </div>
           <div class="flex items-center gap-1.5">
             <div class="h-2.5 w-2.5 rounded-full bg-purple-500"></div>
             <span class="font-medium text-slate-700">
-              {{ data.payload.classes.reduce((sum, cls) => sum + (cls.stats?.others || 0), 0) }}
+              {{ (data.payload?.classes || []).reduce((sum, cls) => sum + (cls.stats?.others || 0), 0) }}
             </span>
             <span class="text-slate-500">O</span>
           </div>
@@ -179,7 +179,7 @@ const START_Y = HEADER_H + STATS_H + SECTION_HEADER_H + PAD_TOP +15
         <div class="flex items-center gap-2">
           <span class="text-sm font-semibold text-slate-900">Turmas</span>
           <span class="flex h-5 min-w-[20px] items-center justify-center rounded-full bg-slate-100 px-1.5 text-xs font-semibold text-slate-700">
-            {{ data.payload.classes.length }}
+            {{ (data.payload?.classes || []).length }}
           </span>
         </div>
         <div class="text-xs text-slate-500">

@@ -57,6 +57,7 @@ type EditValue = {
 type EditState = {
   rowId: number
   courseKey: string
+  courseName: string
   value: EditValue
 }
 
@@ -74,6 +75,33 @@ type RowContract = {
   start: string
   end: string
   status: string
+}
+
+type ApiContract = {
+  partnerId?: number
+  corporateName?: string
+  contractId?: number
+  startedAt?: string
+  endedAt?: string | null
+  status?: string
+}
+
+type ApiStep = {
+  nodeKey?: string
+  order?: number
+  courseId?: number
+  courseName?: string
+  class?: { id?: number; name?: string; identifier?: string }
+  status?: string
+}
+
+type ApiApprentice = {
+  apprenticeId?: number
+  name?: string
+  cpf?: string
+  email?: string
+  contracts?: ApiContract[]
+  steps?: ApiStep[]
 }
 
 type RowItem = {
@@ -238,6 +266,9 @@ function statusConfig(status?: string) {
   const key = normalized.replace(/[\s_]+/g, '')
 
   const map: Record<string, { label: string; class: string; icon: any }> = {
+    current: { label: 'Em Andamento', class: 'bg-blue-50 border-blue-200 text-blue-700', icon: Clock },
+    pending: { label: 'Aguardando', class: 'bg-amber-50 border-amber-200 text-amber-700', icon: Clock },
+    done: { label: 'Concluido', class: 'bg-emerald-50 border-emerald-200 text-emerald-700', icon: CheckCircle2 },
     emandamento: { label: 'Em Andamento', class: 'bg-blue-50 border-blue-200 text-blue-700', icon: Clock },
     inprogress: { label: 'Em Andamento', class: 'bg-blue-50 border-blue-200 text-blue-700', icon: Clock },
     incompleto: { label: 'Incompleto', class: 'bg-rose-50 border-rose-200 text-rose-700', icon: AlertCircle },
@@ -333,6 +364,16 @@ function evolutionLabel(item?: ProgressItem) {
   return fmtDate(item?.evolveAt)
 }
 
+function normalizeKey(value?: string) {
+  if (!value) return ''
+  return value
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[\s_]+/g, '')
+}
+
 const courseSeq = computed(() => deriveCourseSequence(props.nodes, props.edges))
 const classMetaByName = computed(() => {
   const map = new Map<string, { dayOfWeek?: string | null; onlyWithContract?: unknown }>()
@@ -369,12 +410,12 @@ function toggleRow(rowId: number) {
 function summarizeRow(r: RowItem) {
   let ok = 0, doing = 0, bad = 0
   for (const c of courseSeq.value) {
-    const p = r.progress?.[c.courseName]
+    const p = getProgress(r, c)
     if (!p?.status) continue
     const raw = String(p.status || '').toLowerCase()
     const normalized = raw.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[\s_]+/g, '')
-    if (normalized === 'concluido' || normalized === 'conclude' || normalized === 'concluded') ok++
-    else if (normalized === 'emandamento' || normalized === 'inprogress') doing++
+    if (normalized === 'concluido' || normalized === 'conclude' || normalized === 'concluded' || normalized === 'done') ok++
+    else if (normalized === 'emandamento' || normalized === 'inprogress' || normalized === 'current') doing++
     else if (normalized === 'incompleto' || normalized === 'incomplete') bad++
   }
   return { ok, doing, bad }
@@ -402,9 +443,45 @@ async function loadApprenticeWorkflows() {
 
   try {
     const res = await api.getApprenticeWorkflows(props.workflowId)
-    rows.value = Array.isArray(res.data) ? res.data : []
+    const list: ApiApprentice[] = Array.isArray(res.data) ? res.data : []
+    rows.value = list.map((item) => {
+      const contracts = Array.isArray(item.contracts) ? item.contracts : []
+      const primary = selectPrimaryContract(contracts)
+      const progress: Record<string, ProgressItem> = {}
+      const steps = Array.isArray(item.steps) ? item.steps : []
+      for (const step of steps) {
+        const key = String(step?.courseName || '').trim()
+        if (!key) continue
+        const entry = {
+          className: step?.class?.name ?? undefined,
+          status: step?.status ?? undefined,
+        }
+        progress[key] = entry
+        const normalized = normalizeKey(key)
+        if (normalized) progress[`n:${normalized}`] = entry
+        if (step?.courseId !== undefined && step?.courseId !== null) {
+          progress[`id:${step.courseId}`] = entry
+        }
+        if (step?.nodeKey) progress[`node:${step.nodeKey}`] = entry
+      }
+      return {
+        id: Number(item.apprenticeId) || 0,
+        name: String(item.name || ''),
+        cpf: String(item.cpf || ''),
+        email: String(item.email || ''),
+        contract: primary
+          ? {
+              company: String(primary.corporateName || ''),
+              start: String(primary.startedAt || ''),
+              end: primary.endedAt ? String(primary.endedAt) : '',
+              status: String(primary.status || ''),
+            }
+          : null,
+        progress,
+      }
+    })
   } catch (e) {
-    console.error('Erro ao buscar apprentice_workflows/status', e)
+    console.error('Erro ao buscar workflows/{id}/apprentices', e)
     rows.value = []
   } finally {
     hasLoadedRows.value = true
@@ -441,7 +518,43 @@ const showNoResults = computed(
   () => hasLoadedRows.value && filteredRows.value.length === 0 && isSearchActive.value,
 )
 
-function openEdit(row: RowItem, courseKey: string) {
+function getProgress(row: RowItem, course: CourseSeqItem) {
+  const direct = row.progress?.[course.courseName]
+  if (direct) return direct
+  const normalized = normalizeKey(course.courseName)
+  if (normalized) {
+    const byNormalized = row.progress?.[`n:${normalized}`]
+    if (byNormalized) return byNormalized
+  }
+  if (course.courseId !== undefined) {
+    const byId = row.progress?.[`id:${course.courseId}`]
+    if (byId) return byId
+  }
+  const byNode = row.progress?.[`node:${course.nodeId}`]
+  return byNode || undefined
+}
+
+function resolveProgressKey(row: RowItem, course: CourseSeqItem) {
+  if (row.progress?.[course.courseName]) return course.courseName
+  const normalized = normalizeKey(course.courseName)
+  if (normalized && row.progress?.[`n:${normalized}`]) return `n:${normalized}`
+  if (course.courseId !== undefined && row.progress?.[`id:${course.courseId}`]) return `id:${course.courseId}`
+  if (row.progress?.[`node:${course.nodeId}`]) return `node:${course.nodeId}`
+  return course.courseName
+}
+
+function selectPrimaryContract(contracts: ApiContract[]) {
+  if (contracts.length === 0) return null
+  const active = contracts.find((c) => String(c.status || '').toUpperCase() === 'EA')
+  if (active) return active
+  const sorted = contracts
+    .slice()
+    .sort((a, b) => String(b.startedAt || '').localeCompare(String(a.startedAt || '')))
+  return sorted[0] ?? contracts[0]
+}
+
+async function openEdit(row: RowItem, course: CourseSeqItem) {
+  const courseKey = resolveProgressKey(row, course)
   const p = row.progress?.[courseKey]
   const baseValue: EditValue = {
     startDate: '',
@@ -463,6 +576,7 @@ function openEdit(row: RowItem, courseKey: string) {
   edit.value = {
     rowId: row.id,
     courseKey,
+    courseName: course.courseName,
     value: {
       ...baseValue,
       ...(p?.condition || {}),
@@ -746,41 +860,41 @@ async function saveEdit() {
             <div class="p-4">
               <div class="flex flex-1 gap-3 overflow-x-auto">
                 <div v-for="c in courseSeq" :key="`${r.id}:${c.courseName}`" class="w-[480px] shrink-0">
-                  <template v-if="r.progress?.[c.courseName]">
+                  <template v-if="getProgress(r, c)">
                     <div class="rounded-xl border border-slate-200 bg-gradient-to-br from-white to-slate-50 p-3">
                       <!-- Class Name & Status -->
                       <div class="flex items-center justify-between gap-2 mb-3">
                         <div class="flex-1 min-w-0">
-                          <div class="text-sm font-bold text-slate-900 truncate mb-1">
-                            {{ r.progress[c.courseName].className }}
-                          </div>
-                            <span
-                                :class="statusConfig(r.progress[c.courseName].status).class"
-                                class="inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-bold"
-                            >
-                              <component :is="statusConfig(r.progress[c.courseName].status).icon" class="h-3.5 w-3.5" />
-                              {{ statusConfig(r.progress[c.courseName].status).label }}
-                            </span>
-                            <span
-                                v-if="classContractLabel(r.progress[c.courseName])"
-                                class="ml-1 inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold text-slate-700"
-                            >
-                              {{ classContractLabel(r.progress[c.courseName]) }}
-                            </span>
-                            <span
-                                v-if="classDayLabel(r.progress[c.courseName])"
-                                class="ml-1 inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold text-slate-700"
-                            >
-                              <Calendar class="h-3.5 w-3.5" />
-                              {{ classDayLabel(r.progress[c.courseName]) }}
-                            </span>
-                          </div>
+                            <div class="text-sm font-bold text-slate-900 truncate mb-1">
+                              {{ getProgress(r, c)?.className }}
+                            </div>
+                              <span
+                                  :class="statusConfig(getProgress(r, c)?.status).class"
+                                  class="inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-bold"
+                              >
+                                <component :is="statusConfig(getProgress(r, c)?.status).icon" class="h-3.5 w-3.5" />
+                                {{ statusConfig(getProgress(r, c)?.status).label }}
+                              </span>
+                              <span
+                                  v-if="classContractLabel(getProgress(r, c))"
+                                  class="ml-1 inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold text-slate-700"
+                              >
+                                {{ classContractLabel(getProgress(r, c)) }}
+                              </span>
+                              <span
+                                  v-if="classDayLabel(getProgress(r, c))"
+                                  class="ml-1 inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold text-slate-700"
+                              >
+                                <Calendar class="h-3.5 w-3.5" />
+                                {{ classDayLabel(getProgress(r, c)) }}
+                              </span>
+                            </div>
                         <Button
                             size="icon"
                             variant="ghost"
                             class="h-8 w-8 shrink-0"
                             title="Editar condições"
-                            @click.stop="openEdit(r, c.courseName)"
+                              @click.stop="openEdit(r, c)"
                         >
                           <ChevronRight class="h-4 w-4" />
                         </Button>
@@ -791,24 +905,24 @@ async function saveEdit() {
                         <div class="rounded-lg border border-slate-200 bg-white p-2">
                           <div class="text-[10px] text-slate-500 uppercase tracking-wide mb-0.5">Presença</div>
                           <div class="flex items-baseline gap-1">
-                            <span
-                                class="text-lg font-bold"
-                                :class="r.progress[c.courseName].attendance >= 85 ? 'text-emerald-600' : 'text-rose-600'"
-                            >
-                              {{ r.progress[c.courseName].attendance?.toFixed(1) || '-' }}
-                            </span>
+                              <span
+                                  class="text-lg font-bold"
+                                  :class="(getProgress(r, c)?.attendance ?? 0) >= 85 ? 'text-emerald-600' : 'text-rose-600'"
+                              >
+                                {{ getProgress(r, c)?.attendance?.toFixed(1) || '-' }}
+                              </span>
                             <span class="text-xs text-slate-500">%</span>
                           </div>
                         </div>
                         <div class="rounded-lg border border-slate-200 bg-white p-2">
                           <div class="text-[10px] text-slate-500 uppercase tracking-wide mb-0.5">Nota</div>
                           <div class="flex items-baseline gap-1">
-                            <span
-                                class="text-lg font-bold"
-                                :class="r.progress[c.courseName].exam >= 7 ? 'text-emerald-600' : 'text-rose-600'"
-                            >
-                              {{ r.progress[c.courseName].exam?.toFixed(1) || '-' }}
-                            </span>
+                              <span
+                                  class="text-lg font-bold"
+                                  :class="(getProgress(r, c)?.exam ?? 0) >= 7 ? 'text-emerald-600' : 'text-rose-600'"
+                              >
+                                {{ getProgress(r, c)?.exam?.toFixed(1) || '-' }}
+                              </span>
                             <span class="text-xs text-slate-500">/10</span>
                           </div>
                         </div>
@@ -820,12 +934,12 @@ async function saveEdit() {
                           <div class="text-[10px] font-semibold text-blue-900 uppercase tracking-wide">Evolução</div>
                           <div class="text-xs font-bold text-blue-700">
                             {{
-                              evolutionLabel(r.progress[c.courseName])
+                                evolutionLabel(getProgress(r, c))
                             }}
                           </div>
                         </div>
 
-                        <div v-if="r.progress[c.courseName].condition?.isBalanced" class="space-y-1">
+                        <div v-if="getProgress(r, c)?.condition?.isBalanced" class="space-y-1">
                           <div class="flex items-center gap-1.5 rounded-md bg-white border border-blue-200 px-2 py-1">
                             <Scale class="h-3 w-3 text-blue-600" />
                             <span class="text-[11px] font-semibold text-blue-900">
@@ -834,8 +948,8 @@ async function saveEdit() {
                           </div>
                           <div class="text-[9px] text-blue-700 px-1">
                             {{
-                              r.progress[c.courseName].condition?.balanceStrategy?.length > 0
-                                  ? r.progress[c.courseName].condition.balanceStrategy
+                                getProgress(r, c)?.condition?.balanceStrategy?.length > 0
+                                    ? getProgress(r, c)?.condition?.balanceStrategy
                                       .map((s) => (s === 'gender' ? 'Equilíbrio H/M/O' : 'Menor Lotação'))
                                       .join(' + ')
                                   : 'Menor Lotação'
@@ -888,7 +1002,7 @@ async function saveEdit() {
         <div class="sticky top-0 z-10 flex items-center justify-between border-b bg-gradient-to-br from-blue-50 to-white p-5">
           <div>
             <div class="text-sm font-bold text-slate-900 mb-1">Configurar Evolução</div>
-            <div class="text-xs text-slate-600">Aprendiz #{{ edit.rowId }} • {{ edit.courseKey }}</div>
+            <div class="text-xs text-slate-600">Aprendiz #{{ edit.rowId }} • {{ edit.courseName }}</div>
           </div>
           <Button size="icon" variant="ghost" class="h-8 w-8" @click="closeEdit">
             <X class="h-4 w-4" />

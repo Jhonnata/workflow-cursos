@@ -66,7 +66,16 @@ export const api = {
     return { ...res, data: normalized }
   },
   async getWorkflows() {
-    return tryFetch(`${BASE_URL}/workflows`, {}, [])
+    const res = await tryFetch(`${BASE_URL}/workflows`, {}, [])
+    const data = res.data
+    const normalized = Array.isArray(data)
+      ? data
+      : Array.isArray(data?.workflows)
+        ? data.workflows
+        : Array.isArray(data?.data?.workflows)
+          ? data.data.workflows
+          : []
+    return { ...res, data: normalized }
   },
   async saveWorkflow(data: any) {
     return tryFetch(`${BASE_URL}/workflows`, {
@@ -88,9 +97,13 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
     }, {})
   },
+  async getWorkflowGraph(workflowId: string | number) {
+    const id = encodeURIComponent(String(workflowId))
+    return tryFetch(`${BASE_URL}/workflows/${id}/graphs`)
+  },
   async getApprenticeWorkflows(workflowId: string | number) {
     const id = encodeURIComponent(String(workflowId))
-    return tryFetch(`${BASE_URL}/apprentice_workflows/status?workflowId=${id}`, {}, [])
+    return tryFetch(`${BASE_URL}/workflows/${id}/apprentices`, {}, [])
   },
   async updateApprenticeWorkflow(id: number, data: any) {
     return tryFetch(`${BASE_URL}/apprentice_workflow/${id}`, {

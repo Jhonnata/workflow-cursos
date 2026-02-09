@@ -165,6 +165,7 @@ const mainTab = ref<'workflow' | 'evolution'>('workflow')
 const workflowMode = ref<'list' | 'editor'>('list')
 const conditionDetailsOpenId = ref<string | null>(null)
 const activeWorkflow = ref<{ id?: string | number; name: string; description: string; status: string } | null>(null)
+const activeWorkflowGraphId = ref<string | number | null>(null)
 const newWorkflow = ref({name: '', description: '', status: 'active'})
 const createWorkflowOpen = ref(false)
 const editWorkflowOpen = ref(false)
@@ -189,14 +190,25 @@ function setActiveWorkflow(
     opts?: { mode?: 'list' | 'editor'; tab?: 'workflow' | 'evolution'; notify?: boolean },
 ) {
   if (!wf) return
+  const prevId = activeWorkflow.value?.id
   activeWorkflow.value = {
     id: wf.id,
     name: wf.name || '',
     description: wf.description || '',
     status: wf.status || 'active',
   }
-  setNodes(wf.nodes || [])
-  setEdges(wf.edges || [])
+  const hasGraph = Array.isArray(wf?.nodes) || Array.isArray(wf?.edges)
+  const sameWorkflow =
+      prevId !== undefined && prevId !== null && String(prevId) === String(wf.id)
+  if (hasGraph) {
+    setNodes(wf.nodes || [])
+    setEdges(wf.edges || [])
+    activeWorkflowGraphId.value = wf.id
+  } else if (!sameWorkflow) {
+    setNodes([])
+    setEdges([])
+    activeWorkflowGraphId.value = null
+  }
   selectedNodeId.value = null
   selectedEdgeId.value = null
   conditionDetailsOpenId.value = null
@@ -214,6 +226,7 @@ function setActiveWorkflow(
 
 function resetWorkflowState() {
   activeWorkflow.value = null
+  activeWorkflowGraphId.value = null
   setNodes([])
   setEdges([])
   selectedNodeId.value = null
@@ -221,6 +234,111 @@ function resetWorkflowState() {
   conditionDetailsOpenId.value = null
   workflowMode.value = 'list'
   mainTab.value = 'workflow'
+}
+
+function normalizeWorkflowGraph(payload: any) {
+  if (!payload) return { nodes: [], edges: [] }
+  const parseMaybeJson = (value: any) => {
+    if (typeof value !== 'string') return value
+    const trimmed = value.trim()
+    if (!trimmed) return value
+    try {
+      return JSON.parse(trimmed)
+    } catch {
+      return value
+    }
+  }
+  const toNumber = (value: any) => {
+    const n = Number(value)
+    return Number.isFinite(n) ? n : value
+  }
+  const mapApiNodes = (items: any[]) =>
+    items
+      .map((item) => {
+        if (!item) return null
+        const data = parseMaybeJson(item.payloadJson) ?? {}
+        const baseData = data?.payload
+          ? data
+          : { payload: data || {}, nodeId: item.nodeKey }
+        return {
+          id: item.nodeKey ?? String(item.id),
+          type: item.type,
+          position: { x: toNumber(item.positionX) || 0, y: toNumber(item.positionY) || 0 },
+          data: {
+            ...(baseData || {}),
+            connectMode: baseData?.connectMode ?? false,
+            nodeId: item.nodeKey ?? baseData?.nodeId ?? String(item.id),
+          },
+        }
+      })
+      .filter(Boolean)
+  const mapApiEdges = (items: any[]) =>
+    items
+      .map((item) => {
+        if (!item) return null
+        const data = parseMaybeJson(item.dataJson) ?? {}
+        return {
+          id: item.edgeKey ?? String(item.id),
+          source: item.sourceNodeKey ?? item.source ?? '',
+          target: item.targetNodeKey ?? item.target ?? '',
+          sourceHandle: item.sourceHandle ?? item.source_handle ?? null,
+          targetHandle: item.targetHandle ?? item.target_handle ?? null,
+          type: 'smooth',
+          data,
+        }
+      })
+      .filter((edge) => edge?.source && edge?.target)
+  if (Array.isArray(payload)) {
+    const candidate = payload.find((item) => item?.nodes || item?.edges) ?? payload[0]
+    if (candidate) return normalizeWorkflowGraph(candidate)
+    return { nodes: [], edges: [] }
+  }
+  const data = payload.graph ?? payload.graphs ?? payload.data ?? payload
+  const fromWorkflow = payload?.workflow ?? data?.workflow
+  const rawNodes = parseMaybeJson(data?.nodes ?? fromWorkflow?.nodes)
+  const rawEdges = parseMaybeJson(data?.edges ?? fromWorkflow?.edges)
+  if (Array.isArray(data)) return normalizeWorkflowGraph(data)
+  const nodes = Array.isArray(rawNodes)
+    ? rawNodes.length > 0 && (rawNodes[0]?.nodeKey || rawNodes[0]?.payloadJson)
+      ? mapApiNodes(rawNodes)
+      : rawNodes
+    : []
+  const edges = Array.isArray(rawEdges)
+    ? rawEdges.length > 0 && (rawEdges[0]?.edgeKey || rawEdges[0]?.sourceNodeKey)
+      ? mapApiEdges(rawEdges)
+      : rawEdges
+    : []
+  return { nodes, edges }
+}
+
+async function loadWorkflowGraph(workflowId: string | number, opts?: { notify?: boolean }) {
+  const id = workflowId ?? ''
+  if (id === '') return
+  try {
+    const res = await api.getWorkflowGraph(id)
+    const graph = normalizeWorkflowGraph(res.data)
+    setNodes(graph.nodes)
+    setEdges(graph.edges)
+    activeWorkflowGraphId.value = id
+    selectedNodeId.value = null
+    selectedEdgeId.value = null
+    conditionDetailsOpenId.value = null
+    syncNodeMeta()
+    syncEdgesForStart()
+    if (opts?.notify) {
+      toast({
+        title: 'Workflow carregado',
+        description: `Workflow "${activeWorkflow.value?.name || ''}" foi carregado com sucesso.`,
+      })
+    }
+  } catch (e) {
+    console.error('Erro ao carregar workflow/graphs', e)
+    toast({
+      title: 'Erro ao carregar workflow',
+      description: formatApiError(e),
+      variant: 'destructive',
+    })
+  }
 }
 
 const classesByCourse = computed(() => {
@@ -270,7 +388,7 @@ onMounted(async () => {
   }
 })
 
-function applyRouteSelection() {
+async function applyRouteSelection() {
   const routeId = props.workflowId
   if (routeId === undefined || routeId === null || routeId === '') {
     if (activeWorkflow.value) resetWorkflowState()
@@ -282,6 +400,9 @@ function applyRouteSelection() {
     mainTab.value = tab
     if (tab === 'workflow') workflowMode.value = 'editor'
     else workflowMode.value = 'list'
+    if (activeWorkflowGraphId.value === null || String(activeWorkflowGraphId.value) !== targetId) {
+      await loadWorkflowGraph(targetId)
+    }
     return
   }
   const wf = apiWorkflows.value.find((item) => String(item.id) === targetId)
@@ -289,12 +410,13 @@ function applyRouteSelection() {
   const tab = props.initialTab ?? 'workflow'
   const mode = tab === 'evolution' ? 'list' : 'editor'
   setActiveWorkflow(wf, { tab, mode })
+  await loadWorkflowGraph(wf.id)
 }
 
 watch(
     () => [props.workflowId, props.initialTab, apiWorkflows.value.length],
     () => {
-      applyRouteSelection()
+      void applyRouteSelection()
     },
     {immediate: true},
 )
@@ -304,6 +426,12 @@ function goToWorkflowTab() {
   if (activeWorkflow.value?.id !== undefined) {
     workflowMode.value = 'editor'
     router.push({name: 'workflow', params: {id: activeWorkflow.value.id}})
+    if (
+        activeWorkflowGraphId.value === null ||
+        String(activeWorkflowGraphId.value) !== String(activeWorkflow.value.id)
+    ) {
+      void loadWorkflowGraph(activeWorkflow.value.id)
+    }
   } else {
     workflowMode.value = 'list'
     router.push({name: 'home'})
@@ -319,14 +447,16 @@ function goToEvolutionTab() {
   }
 }
 
-function loadWorkflow(wf: any) {
-  setActiveWorkflow(wf, { mode: 'editor', tab: 'workflow', notify: true })
+async function loadWorkflow(wf: any) {
+  setActiveWorkflow(wf, { mode: 'editor', tab: 'workflow' })
   router.push({ name: 'workflow', params: { id: wf.id } })
+  await loadWorkflowGraph(wf.id, { notify: true })
 }
 
-function openEvolutionWorkflow(wf: any) {
+async function openEvolutionWorkflow(wf: any) {
   setActiveWorkflow(wf, { mode: 'list', tab: 'evolution' })
   router.push({ name: 'workflow-apprentices', params: { id: wf.id } })
+  await loadWorkflowGraph(wf.id)
 }
 
 function openEditWorkflow(wf: any) {
@@ -804,10 +934,11 @@ async function deleteWorkflow(wf: any) {
   try {
     const res = await api.deleteWorkflow(String(wf.id))
     apiWorkflows.value = apiWorkflows.value.filter((w) => String(w.id) !== String(wf.id))
-    if (activeWorkflow.value && String(activeWorkflow.value.id) === String(wf.id)) {
-      activeWorkflow.value = null
-      setNodes([])
-      setEdges([])
+      if (activeWorkflow.value && String(activeWorkflow.value.id) === String(wf.id)) {
+        activeWorkflow.value = null
+        activeWorkflowGraphId.value = null
+        setNodes([])
+        setEdges([])
       selectedNodeId.value = null
       selectedEdgeId.value = null
       conditionDetailsOpenId.value = null
