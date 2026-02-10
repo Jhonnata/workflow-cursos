@@ -101,9 +101,27 @@ export const api = {
     const id = encodeURIComponent(String(workflowId))
     return tryFetch(`${BASE_URL}/workflows/${id}/graphs`)
   },
-  async getApprenticeWorkflows(workflowId: string | number) {
+  async getApprenticeWorkflows(
+    workflowId: string | number,
+    params?: {
+      limit?: number
+      offset?: number
+      q?: string
+      contract?: string
+      classId?: string | number
+    },
+  ) {
     const id = encodeURIComponent(String(workflowId))
-    return tryFetch(`${BASE_URL}/workflows/${id}/apprentices`, {}, [])
+    const search = new URLSearchParams()
+    if (params?.limit !== undefined) search.set('lmt', String(params.limit))
+    if (params?.offset !== undefined) search.set('offset', String(params.offset))
+    if (params?.q) search.set('q', String(params.q))
+    if (params?.contract) search.set('contract', String(params.contract))
+    if (params?.classId !== undefined && params?.classId !== null && params?.classId !== '') {
+      search.set('classId', String(params.classId))
+    }
+    const suffix = search.toString()
+    return tryFetch(`${BASE_URL}/workflows/${id}/apprentices${suffix ? `?${suffix}` : ''}`, {}, [])
   },
   async updateApprenticeWorkflow(id: number, data: any) {
     return tryFetch(`${BASE_URL}/apprentice_workflow/${id}`, {

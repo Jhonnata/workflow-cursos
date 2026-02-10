@@ -395,6 +395,9 @@ const rows = ref<RowItem[]>([])
 const edit = ref<EditState | null>(null)
 const searchQuery = ref('')
 const hasLoadedRows = ref(false)
+const totalCount = ref(0)
+const pageLimit = ref(10)
+const pageOffset = ref(0)
 
 /** Accordion state */
 const expanded = ref<Set<number>>(new Set())
@@ -442,8 +445,19 @@ async function loadApprenticeWorkflows() {
   }
 
   try {
-    const res = await api.getApprenticeWorkflows(props.workflowId)
-    const list: ApiApprentice[] = Array.isArray(res.data) ? res.data : []
+    const q = searchQuery.value.trim()
+    const res = await api.getApprenticeWorkflows(props.workflowId, {
+      limit: pageLimit.value,
+      offset: pageOffset.value,
+      q: q || undefined,
+    })
+    const payload = res.data as any
+    const list: ApiApprentice[] = Array.isArray(payload)
+      ? payload
+      : Array.isArray(payload?.data)
+        ? payload.data
+        : []
+    totalCount.value = Number(payload?.total ?? list.length ?? 0) || 0
     rows.value = list.map((item) => {
       const contracts = Array.isArray(item.contracts) ? item.contracts : []
       const primary = selectPrimaryContract(contracts)
@@ -483,6 +497,7 @@ async function loadApprenticeWorkflows() {
   } catch (e) {
     console.error('Erro ao buscar workflows/{id}/apprentices', e)
     rows.value = []
+    totalCount.value = 0
   } finally {
     hasLoadedRows.value = true
   }
@@ -495,6 +510,16 @@ watch(
   () => {
     hasLoadedRows.value = false
     rows.value = []
+    totalCount.value = 0
+    loadApprenticeWorkflows()
+  },
+)
+
+watch(
+  () => searchQuery.value,
+  () => {
+    hasLoadedRows.value = false
+    pageOffset.value = 0
     loadApprenticeWorkflows()
   },
 )
