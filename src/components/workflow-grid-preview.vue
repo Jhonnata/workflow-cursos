@@ -56,8 +56,12 @@ type EditValue = {
 
 type EditState = {
   rowId: number
+  apprenticeId: number
   courseKey: string
   courseName: string
+  conditionNodeKey: string | null
+  conditionOptions: { nodeKey: string; label: string }[]
+  overrideId: number | null
   value: EditValue
 }
 
@@ -68,6 +72,12 @@ type ProgressItem = {
   exam?: number
   evolveAt?: string
   condition?: EditValue
+  eligibleForNext?: boolean | null
+  eligibleForNextReason?: string[]
+  eligibilityAny?: boolean | null
+  eligibilityReasons?: string[]
+  eligibilityByCondition?: { nodeKey: string; eligible: boolean; reasons: string[] }[]
+  isFinalStep?: boolean
 }
 
 type RowContract = {
@@ -424,6 +434,15 @@ function summarizeRow(r: RowItem) {
   return { ok, doing, bad }
 }
 
+function countIneligibleSteps(r: RowItem) {
+  let count = 0
+  for (const c of courseSeq.value) {
+    const p = getProgress(r, c)
+    if (p?.eligibilityAny === false || p?.eligibleForNext === false) count++
+  }
+  return count
+}
+
 function classDayLabel(item?: ProgressItem) {
   if (!item?.className) return ''
   const meta = classMetaByName.value.get(item.className)
@@ -435,6 +454,35 @@ function classContractLabel(item?: ProgressItem) {
   const meta = classMetaByName.value.get(item.className)
   if (!meta) return ''
   return onlyWithContractFlag({ onlyWithContract: meta.onlyWithContract }) ? 'Contrato' : 'Livre'
+}
+
+function eligibilityReasonLabel(code: string) {
+  const map: Record<string, string> = {
+    nocurrentstep: 'Sem etapa atual',
+    notcurrentstep: 'Aguardando evolucao',
+    noconditionforstep: 'Sem condicao definida para a etapa',
+    conditionnotfound: 'Condicao nao encontrada',
+    classstatusmismatch: 'Status da turma nao atende a condicao',
+    classnotended: 'Turma ainda nao finalizada',
+    beforespecificdate: 'Data especifica ainda nao atingida',
+    attendanceunavailable: 'Frequencia nao disponivel',
+    attendancebelowminimum: 'Frequencia abaixo do minimo',
+    examunavailable: 'Nota nao disponivel',
+    exambelowminimum: 'Nota abaixo do minimo',
+    lessonscompletionunavailable: 'Conclusao de aulas nao disponivel',
+    lessonsnotcompleted: 'Aulas nao concluidas',
+    contractstatusmismatch: 'Status do contrato nao atende a condicao',
+    finalstep: 'Evolucao completa',
+  }
+  const key = String(code || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, '')
+  return map[key] || ''
+}
+
+function isWaitingEvolution(reasons?: string[]) {
+  return (reasons || []).some((reason) => eligibilityReasonLabel(reason) === 'Aguardando evolucao')
 }
 
 async function loadApprenticeWorkflows() {
@@ -466,9 +514,36 @@ async function loadApprenticeWorkflows() {
       for (const step of steps) {
         const key = String(step?.courseName || '').trim()
         if (!key) continue
+        const stats = step?.class?.stats || {}
+        const attendanceRaw = stats.actual_attendance_percentage ?? stats.attendance_record_percentage
+        const examRaw = stats.overall_average ?? stats.overall_performance
+        const attendance = attendanceRaw !== undefined ? Number(attendanceRaw) : undefined
+        const exam = examRaw !== undefined ? Number(examRaw) : undefined
+        const eligibility = step?.eligibility || {}
         const entry = {
           className: step?.class?.name ?? undefined,
           status: step?.status ?? undefined,
+          attendance: Number.isFinite(attendance as number) ? (attendance as number) : undefined,
+          exam: Number.isFinite(exam as number) ? (exam as number) : undefined,
+          eligibleForNext: step?.eligibleForNext ?? null,
+          eligibleForNextReason: Array.isArray(step?.eligibleForNextReason)
+            ? step.eligibleForNextReason.map((r: any) => String(r))
+            : [],
+          eligibilityAny:
+            typeof eligibility?.anyEligible === 'boolean' ? eligibility.anyEligible : null,
+          eligibilityReasons: Array.isArray(eligibility?.reasons)
+            ? eligibility.reasons.map((r: any) => String(r))
+            : [],
+          eligibilityByCondition: Array.isArray(eligibility?.byCondition)
+            ? eligibility.byCondition.map((item: any) => ({
+                nodeKey: String(item?.nodeKey || ''),
+                eligible: !!item?.eligible,
+                reasons: Array.isArray(item?.reasons) ? item.reasons.map((r: any) => String(r)) : [],
+              }))
+            : [],
+          isFinalStep: Array.isArray(eligibility?.reasons)
+            ? eligibility.reasons.some((r: any) => String(r) === 'finalStep')
+            : false,
         }
         progress[key] = entry
         const normalized = normalizeKey(key)
@@ -559,6 +634,32 @@ function getProgress(row: RowItem, course: CourseSeqItem) {
   return byNode || undefined
 }
 
+function conditionOptionsForCourse(course: CourseSeqItem) {
+  const nodeTypeById = new Map(props.nodes.map((n) => [n.id, n.type]))
+  const found = new Set<string>()
+  for (const e of props.edges || []) {
+    if (e.source !== course.nodeId) continue
+    if (!String(e.sourceHandle || '').startsWith('class-out')) continue
+    if (String(e.targetHandle || '') !== 'if-in') continue
+    if (nodeTypeById.get(String(e.target)) !== 'condition') continue
+    found.add(String(e.target))
+  }
+  return Array.from(found)
+    .sort()
+    .map((nodeKey, idx) => ({ nodeKey, label: `Condicao ${idx + 1}` }))
+}
+
+function defaultConditionKey(options: { nodeKey: string }[]) {
+  if (options.length <= 1) return options[0]?.nodeKey ?? null
+  for (const opt of options) {
+    const hasOk = (props.edges || []).some(
+      (e) => e.source === opt.nodeKey && e.sourceHandle === 'if-ok',
+    )
+    if (hasOk) return opt.nodeKey
+  }
+  return options[0]?.nodeKey ?? null
+}
+
 function resolveProgressKey(row: RowItem, course: CourseSeqItem) {
   if (row.progress?.[course.courseName]) return course.courseName
   const normalized = normalizeKey(course.courseName)
@@ -578,9 +679,126 @@ function selectPrimaryContract(contracts: ApiContract[]) {
   return sorted[0] ?? contracts[0]
 }
 
+function applyResolvedConditionToEdit(payload: Record<string, any>) {
+  if (!edit.value) return
+  const cleanDate = (value: any) => {
+    if (value === null || value === undefined) return ''
+    const raw = String(value)
+    if (!raw || raw === '0000-00-00') return ''
+    return raw
+  }
+  const current = edit.value.value
+  const next: EditValue = {
+    ...current,
+    startDate: cleanDate(payload.startDate),
+    endDate: cleanDate(payload.endDate),
+    evolveAt: cleanDate(payload.evolveAt),
+    evolutionMode: (payload.evolutionMode as any) || current.evolutionMode || 'none',
+    minAttendance: Number(payload.minAttendance ?? current.minAttendance ?? 100),
+    minExamGrade: Number(payload.minExamGrade ?? current.minExamGrade ?? 0),
+    mustCompleteLessons: !!(payload.mustCompleteLessons ?? current.mustCompleteLessons),
+    checkContract: !!(payload.checkContract ?? current.checkContract),
+    contractStatus: Array.isArray(payload.contractStatus) ? payload.contractStatus : (current.contractStatus || []),
+    classInsertStatus: String(payload.classInsertStatus ?? current.classInsertStatus ?? 'inProgress'),
+    classExitStatus: String(payload.classExitStatus ?? current.classExitStatus ?? 'conclude'),
+    classCheckStatus: String(payload.classCheckStatus ?? current.classCheckStatus ?? 'inProgress'),
+    hasMinGrade: !!(payload.hasMinGrade ?? current.hasMinGrade),
+    hasAttendance: !!(payload.hasAttendance ?? current.hasAttendance),
+    useClassEndDate: !!(payload.useClassEndDate ?? current.useClassEndDate),
+    keepSameDayOfWeek: !!(payload.keepSameDayOfWeek ?? current.keepSameDayOfWeek),
+    isBalanced: !!(payload.isBalanced ?? current.isBalanced),
+    balanceStrategy: Array.isArray(payload.balanceStrategy)
+      ? payload.balanceStrategy
+      : (current.balanceStrategy || []),
+  }
+  if (!next.evolutionMode || next.evolutionMode === 'none') {
+    const inferred =
+      next.useClassEndDate
+        ? 'classEnd'
+        : next.evolveAt
+          ? 'specific'
+          : next.startDate || next.endDate
+            ? 'range'
+            : 'none'
+    next.evolutionMode = inferred
+  }
+  edit.value = { ...edit.value, value: next }
+}
+
+function applyOverridePatchToEdit(payload: Record<string, any>) {
+  if (!edit.value) return
+  const current = edit.value.value
+  const patch: Partial<EditValue> = {}
+  if ('startDate' in payload) patch.startDate = String(payload.startDate ?? '')
+  if ('endDate' in payload) patch.endDate = String(payload.endDate ?? '')
+  if ('evolveAt' in payload) patch.evolveAt = String(payload.evolveAt ?? '')
+  if ('evolutionMode' in payload) patch.evolutionMode = payload.evolutionMode
+  if ('minAttendance' in payload) patch.minAttendance = Number(payload.minAttendance)
+  if ('minExamGrade' in payload) patch.minExamGrade = Number(payload.minExamGrade)
+  if ('mustCompleteLessons' in payload) patch.mustCompleteLessons = !!payload.mustCompleteLessons
+  if ('checkContract' in payload) patch.checkContract = !!payload.checkContract
+  if ('contractStatus' in payload) {
+    patch.contractStatus = Array.isArray(payload.contractStatus) ? payload.contractStatus : []
+  }
+  if ('classInsertStatus' in payload) patch.classInsertStatus = String(payload.classInsertStatus || '')
+  if ('classExitStatus' in payload) patch.classExitStatus = String(payload.classExitStatus || '')
+  if ('classCheckStatus' in payload) patch.classCheckStatus = String(payload.classCheckStatus || '')
+  if ('hasMinGrade' in payload) patch.hasMinGrade = !!payload.hasMinGrade
+  if ('hasAttendance' in payload) patch.hasAttendance = !!payload.hasAttendance
+  if ('useClassEndDate' in payload) patch.useClassEndDate = !!payload.useClassEndDate
+  if ('keepSameDayOfWeek' in payload) patch.keepSameDayOfWeek = !!payload.keepSameDayOfWeek
+  if ('isBalanced' in payload) patch.isBalanced = !!payload.isBalanced
+  if ('balanceStrategy' in payload) {
+    patch.balanceStrategy = Array.isArray(payload.balanceStrategy) ? payload.balanceStrategy : []
+  }
+  edit.value = { ...edit.value, value: { ...current, ...patch } }
+}
+
+async function loadOverrideMetaForEdit() {
+  if (!edit.value) return
+  if (!props.workflowId || !edit.value.conditionNodeKey) return
+  try {
+    const res = await api.listWorkflowOverrides(props.workflowId, edit.value.apprenticeId)
+    const list = Array.isArray(res.data) ? res.data : []
+    const match = list.find((item: any) => String(item.nodeKey) === String(edit.value?.conditionNodeKey))
+    edit.value = { ...edit.value, overrideId: match?.id ? Number(match.id) : null }
+    if (match?.override && typeof match.override === 'object') {
+      applyOverridePatchToEdit(match.override as Record<string, any>)
+    }
+  } catch (e) {
+    console.error('Erro ao buscar overrides', e)
+  }
+}
+
+async function loadResolvedConditionForEdit() {
+  if (!edit.value) return
+  if (!props.workflowId || !edit.value.conditionNodeKey) return
+  try {
+    const res = await api.getResolvedCondition(
+      props.workflowId,
+      edit.value.conditionNodeKey,
+      edit.value.apprenticeId,
+    )
+    if (res?.data && typeof res.data === 'object') {
+      applyResolvedConditionToEdit(res.data as Record<string, any>)
+    }
+  } catch (e) {
+    console.error('Erro ao buscar condicao resolvida', e)
+  }
+}
+
+async function changeConditionKey(nodeKey: string) {
+  if (!edit.value) return
+  edit.value = { ...edit.value, conditionNodeKey: nodeKey, overrideId: null }
+  await loadOverrideMetaForEdit()
+  await loadResolvedConditionForEdit()
+}
+
 async function openEdit(row: RowItem, course: CourseSeqItem) {
   const courseKey = resolveProgressKey(row, course)
   const p = row.progress?.[courseKey]
+  const options = conditionOptionsForCourse(course)
+  const conditionNodeKey = defaultConditionKey(options)
   const baseValue: EditValue = {
     startDate: '',
     endDate: p?.evolveAt || '',
@@ -600,8 +818,12 @@ async function openEdit(row: RowItem, course: CourseSeqItem) {
   }
   edit.value = {
     rowId: row.id,
+    apprenticeId: row.id,
     courseKey,
     courseName: course.courseName,
+    conditionNodeKey,
+    conditionOptions: options,
+    overrideId: null,
     value: {
       ...baseValue,
       ...(p?.condition || {}),
@@ -621,6 +843,8 @@ async function openEdit(row: RowItem, course: CourseSeqItem) {
       edit.value = { ...edit.value, value: { ...v, evolutionMode: inferred } }
     }
   }
+  await loadOverrideMetaForEdit()
+  await loadResolvedConditionForEdit()
 }
 
 function closeEdit() {
@@ -676,32 +900,46 @@ function sanitizeOneToHundred(value: unknown) {
 
 async function saveEdit() {
   if (!edit.value) return
-  const targetRow = rows.value.find((r) => r.id === edit.value?.rowId)
-  if (!targetRow) return
-
-  const prog = { ...(targetRow.progress || {}) }
-  const cur = prog[edit.value.courseKey] || {}
-  let nextEvolveAt = (cur as any).evolveAt
-  if (edit.value.value.evolutionMode === 'specific') {
-    nextEvolveAt = edit.value.value.evolveAt || ''
-  } else if (edit.value.value.evolutionMode === 'range') {
-    nextEvolveAt = edit.value.value.endDate || ''
+  if (!props.workflowId || !edit.value.conditionNodeKey) return
+  const override = {
+    startDate: edit.value.value.startDate,
+    endDate: edit.value.value.endDate,
+    evolveAt: edit.value.value.evolveAt,
+    evolutionMode: edit.value.value.evolutionMode,
+    minAttendance: edit.value.value.minAttendance,
+    minExamGrade: edit.value.value.minExamGrade,
+    mustCompleteLessons: edit.value.value.mustCompleteLessons,
+    checkContract: edit.value.value.checkContract,
+    contractStatus: edit.value.value.contractStatus || [],
+    classInsertStatus: edit.value.value.classInsertStatus,
+    classExitStatus: edit.value.value.classExitStatus,
+    classCheckStatus: edit.value.value.classCheckStatus,
+    hasMinGrade: edit.value.value.hasMinGrade,
+    hasAttendance: edit.value.value.hasAttendance,
+    useClassEndDate: edit.value.value.useClassEndDate,
+    keepSameDayOfWeek: edit.value.value.keepSameDayOfWeek,
+    isBalanced: edit.value.value.isBalanced,
+    balanceStrategy: edit.value.value.balanceStrategy || [],
   }
-  prog[edit.value.courseKey] = {
-    ...cur,
-    evolveAt: nextEvolveAt,
-    condition: { ...edit.value.value },
-  }
-
-  const updatedRow = { ...targetRow, progress: prog }
 
   try {
-    await api.updateApprenticeWorkflow(updatedRow.id, updatedRow)
-    rows.value = rows.value.map((row) => (row.id === updatedRow.id ? updatedRow : row))
+    if (edit.value.overrideId) {
+      await api.updateWorkflowOverride(props.workflowId, edit.value.overrideId, override)
+    } else {
+      const res = await api.createWorkflowOverride(
+        props.workflowId,
+        edit.value.apprenticeId,
+        edit.value.conditionNodeKey,
+        override,
+      )
+      const createdId = res?.data?.id ?? res?.data?.override?.id
+      if (createdId) {
+        edit.value = { ...edit.value, overrideId: Number(createdId) }
+      }
+    }
     closeEdit()
   } catch (e) {
-    console.error('Erro ao salvar no servidor', e)
-    rows.value = rows.value.map((row) => (row.id === updatedRow.id ? updatedRow : row))
+    console.error('Erro ao salvar override', e)
     closeEdit()
   }
 }
@@ -853,8 +1091,15 @@ async function saveEdit() {
                         class="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] font-bold text-rose-700"
                     >
                       <AlertCircle class="h-3.5 w-3.5" />
-                      {{ summarizeRow(r).bad }} incompleto(s)
-                    </span>
+                        {{ summarizeRow(r).bad }} incompleto(s)
+                      </span>
+                      <span
+                          v-if="countIneligibleSteps(r) > 0"
+                          class="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] font-bold text-rose-700"
+                      >
+                        <AlertCircle class="h-3.5 w-3.5" />
+                        {{ countIneligibleSteps(r) }} nao elegivel(is)
+                      </span>
 
                     <span class="text-xs text-slate-500 ml-1">
                       Clique para {{ isExpanded(r.id) ? 'recolher' : 'ver detalhes' }}
@@ -889,30 +1134,57 @@ async function saveEdit() {
                     <div class="rounded-xl border border-slate-200 bg-gradient-to-br from-white to-slate-50 p-3">
                       <!-- Class Name & Status -->
                       <div class="flex items-center justify-between gap-2 mb-3">
-                        <div class="flex-1 min-w-0">
+                        <div class="flex-1 min-w-0 gap-2">
                             <div class="text-sm font-bold text-slate-900 truncate mb-1">
                               {{ getProgress(r, c)?.className }}
                             </div>
-                              <span
-                                  :class="statusConfig(getProgress(r, c)?.status).class"
-                                  class="inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-bold"
-                              >
+                            <div class="flex flex-wrap items-center gap-2">
+                               <span
+                                   :class="statusConfig(getProgress(r, c)?.status).class"
+                                   class="inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-bold"
+                               >
                                 <component :is="statusConfig(getProgress(r, c)?.status).icon" class="h-3.5 w-3.5" />
                                 {{ statusConfig(getProgress(r, c)?.status).label }}
                               </span>
                               <span
+                                  v-if="!getProgress(r, c)?.isFinalStep && (getProgress(r, c)?.eligibilityAny === true)"
+                                  class="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[10px] font-semibold text-emerald-700  mb-1"
+                              >
+                                Elegivel
+                              </span>
+                              <span
+                                  v-else-if="!getProgress(r, c)?.isFinalStep && (getProgress(r, c)?.eligibilityReasons || []).length > 0 && isWaitingEvolution(getProgress(r, c)?.eligibilityReasons)"
+                                  class="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[10px] font-semibold text-amber-700"
+                              >
+                                Aguardando evolucao
+                              </span>
+                              <span
+                                  v-else-if="!getProgress(r, c)?.isFinalStep && ((getProgress(r, c)?.eligibilityAny === false) || (getProgress(r, c)?.eligibleForNext === false) || ((getProgress(r, c)?.eligibilityReasons || []).length > 0))"
+                                  class="inline-flex items-center rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[10px] font-semibold text-rose-700"
+                              >
+                                Nao elegivel
+                              </span>
+                              <span
+                                  v-if="getProgress(r, c)?.isFinalStep"
+                                  class="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[10px] font-semibold text-emerald-700"
+                              >
+                                Evolucao completa
+                              </span>
+                              <span
                                   v-if="classContractLabel(getProgress(r, c))"
-                                  class="ml-1 inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold text-slate-700"
+                                  class="ml-1 inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[10px] font-semibold text-slate-700"
                               >
                                 {{ classContractLabel(getProgress(r, c)) }}
                               </span>
                               <span
                                   v-if="classDayLabel(getProgress(r, c))"
-                                  class="ml-1 inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold text-slate-700"
+                                  class="ml-1 inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[10px] font-semibold text-slate-700"
                               >
                                 <Calendar class="h-3.5 w-3.5" />
                                 {{ classDayLabel(getProgress(r, c)) }}
                               </span>
+                            </div>
+
                             </div>
                         <Button
                             size="icon"
@@ -922,11 +1194,26 @@ async function saveEdit() {
                               @click.stop="openEdit(r, c)"
                         >
                           <ChevronRight class="h-4 w-4" />
-                        </Button>
-                      </div>
+                          </Button>
+                        </div>
 
-                      <!-- Metrics -->
-                      <div class="grid grid-cols-2 gap-2 mb-3">
+                        <div
+                            v-if="(getProgress(r, c)?.eligibilityReasons || getProgress(r, c)?.eligibleForNextReason || []).length > 0 && !isWaitingEvolution(getProgress(r, c)?.eligibilityReasons || [])"
+                            class="mb-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[10px] text-rose-700"
+                        >
+                          {{
+                            (getProgress(r, c)?.eligibilityReasons?.length
+                              ? getProgress(r, c)?.eligibilityReasons
+                              : getProgress(r, c)?.eligibleForNextReason || []
+                            )
+                              .map((reason) => eligibilityReasonLabel(reason))
+                              .filter(Boolean)
+                              .join(', ')
+                          }}
+                        </div>
+
+                        <!-- Metrics -->
+                        <div class="grid grid-cols-2 gap-2 mb-3">
                         <div class="rounded-lg border border-slate-200 bg-white p-2">
                           <div class="text-[10px] text-slate-500 uppercase tracking-wide mb-0.5">Presença</div>
                           <div class="flex items-baseline gap-1">
@@ -1035,6 +1322,21 @@ async function saveEdit() {
         </div>
 
         <div class="space-y-4 p-5">
+          <div
+              v-if="edit.conditionOptions.length > 1"
+              class="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-2"
+          >
+            <div class="text-[10px] font-bold text-slate-900 uppercase tracking-wide">Condicao da transicao</div>
+            <select
+                class="h-9 w-full rounded-md border border-slate-200 bg-white px-2 text-xs"
+                :value="edit.conditionNodeKey || ''"
+                @change="(e) => changeConditionKey((e.target as HTMLSelectElement).value)"
+            >
+              <option v-for="opt in edit.conditionOptions" :key="opt.nodeKey" :value="opt.nodeKey">
+                {{ opt.label }}
+              </option>
+            </select>
+          </div>
           <!-- Evolução por Data -->
           <div class="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-3">
             <div class="flex items-center gap-2 mb-2">

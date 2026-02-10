@@ -123,6 +123,58 @@ export const api = {
     const suffix = search.toString()
     return tryFetch(`${BASE_URL}/workflows/${id}/apprentices${suffix ? `?${suffix}` : ''}`, {}, [])
   },
+  async listWorkflowOverrides(workflowId: string | number, apprenticeId?: string | number) {
+    const id = encodeURIComponent(String(workflowId))
+    const query =
+      apprenticeId !== undefined && apprenticeId !== null && apprenticeId !== ''
+        ? `?apprenticeId=${encodeURIComponent(String(apprenticeId))}`
+        : ''
+    return tryFetch(`${BASE_URL}/workflows/${id}/overrides${query}`, {}, [])
+  },
+  async createWorkflowOverride(
+    workflowId: string | number,
+    apprenticeId: string | number,
+    nodeKey: string,
+    override: Record<string, any>,
+  ) {
+    const id = encodeURIComponent(String(workflowId))
+    return tryFetch(`${BASE_URL}/workflows/${id}/overrides`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ apprentice: apprenticeId, nodeKey, override }),
+    })
+  },
+  async updateWorkflowOverride(
+    workflowId: string | number,
+    overrideId: string | number,
+    override: Record<string, any>,
+  ) {
+    const wfId = encodeURIComponent(String(workflowId))
+    const ovId = encodeURIComponent(String(overrideId))
+    return tryFetch(`${BASE_URL}/workflows/${wfId}/overrides/${ovId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ override }),
+    })
+  },
+  async deleteWorkflowOverride(workflowId: string | number, overrideId: string | number) {
+    const wfId = encodeURIComponent(String(workflowId))
+    const ovId = encodeURIComponent(String(overrideId))
+    return tryFetch(`${BASE_URL}/workflows/${wfId}/overrides/${ovId}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+    })
+  },
+  async getResolvedCondition(
+    workflowId: string | number,
+    nodeKey: string,
+    apprenticeId: string | number,
+  ) {
+    const wfId = encodeURIComponent(String(workflowId))
+    const nk = encodeURIComponent(String(nodeKey))
+    const ap = encodeURIComponent(String(apprenticeId))
+    return tryFetch(`${BASE_URL}/workflows/${wfId}/conditions/${nk}/apprentice/${ap}`)
+  },
   async updateApprenticeWorkflow(id: number, data: any) {
     return tryFetch(`${BASE_URL}/apprentice_workflow/${id}`, {
       method: 'PATCH',
