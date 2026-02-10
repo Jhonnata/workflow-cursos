@@ -12,6 +12,8 @@ import {
   CheckCircle2,
   AlertCircle,
   Clock,
+  Pencil,
+  ChevronLeft,
 } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { DatePicker } from '@/components/ui/date-picker'
@@ -103,6 +105,7 @@ type ApiStep = {
   courseName?: string
   class?: { id?: number; name?: string; identifier?: string }
   status?: string
+  isFinalStep?: boolean
 }
 
 type ApiApprentice = {
@@ -541,9 +544,12 @@ async function loadApprenticeWorkflows() {
                 reasons: Array.isArray(item?.reasons) ? item.reasons.map((r: any) => String(r)) : [],
               }))
             : [],
-          isFinalStep: Array.isArray(eligibility?.reasons)
-            ? eligibility.reasons.some((r: any) => String(r) === 'finalStep')
-            : false,
+          isFinalStep:
+            typeof step?.isFinalStep === 'boolean'
+              ? step.isFinalStep
+              : Array.isArray(eligibility?.reasons)
+                ? eligibility.reasons.some((r: any) => String(r) === 'finalStep')
+                : false,
         }
         progress[key] = entry
         const normalized = normalizeKey(key)
@@ -617,6 +623,32 @@ const showNoData = computed(
 const showNoResults = computed(
   () => hasLoadedRows.value && filteredRows.value.length === 0 && isSearchActive.value,
 )
+const totalPages = computed(() => {
+  const limit = pageLimit.value || 1
+  return Math.max(1, Math.ceil(totalCount.value / limit))
+})
+const currentPage = computed(() =>
+  Math.min(totalPages.value, Math.floor(pageOffset.value / pageLimit.value) + 1),
+)
+const pageStart = computed(() => (totalCount.value === 0 ? 0 : pageOffset.value + 1))
+const pageEnd = computed(() => Math.min(pageOffset.value + rows.value.length, totalCount.value))
+
+function goToPage(page: number) {
+  const safe = Math.min(Math.max(page, 1), totalPages.value)
+  const nextOffset = (safe - 1) * pageLimit.value
+  if (nextOffset === pageOffset.value) return
+  hasLoadedRows.value = false
+  pageOffset.value = nextOffset
+  loadApprenticeWorkflows()
+}
+
+function prevPage() {
+  goToPage(currentPage.value - 1)
+}
+
+function nextPage() {
+  goToPage(currentPage.value + 1)
+}
 
 function getProgress(row: RowItem, course: CourseSeqItem) {
   const direct = row.progress?.[course.courseName]
@@ -965,7 +997,7 @@ async function saveEdit() {
                 class="inline-flex items-center gap-1.5 rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-[11px] font-semibold text-blue-700"
             >
               <Users class="h-3.5 w-3.5" />
-              {{ filteredRows.length }} aprendizes
+              {{ totalCount }} aprendizes
             </span>
           </div>
         </div>
@@ -974,6 +1006,34 @@ async function saveEdit() {
         <div class="flex items-center gap-2">
           <div class="flex-1">
             <Input v-model="searchQuery" placeholder="Buscar por nome, CPF ou email..." class="h-9" />
+          </div>
+        </div>
+        <div class="flex items-center justify-between gap-2 mt-2">
+          <div class="text-[11px] text-slate-600">
+            Mostrando {{ pageStart }}-{{ pageEnd }} de {{ totalCount }} aprendizes
+          </div>
+          <div class="flex items-center gap-1.5">
+            <Button
+                size="icon"
+                variant="ghost"
+                class="h-8 w-8"
+                :disabled="isLoading || currentPage === 1"
+                @click="prevPage"
+            >
+              <ChevronLeft class="h-4 w-4" />
+            </Button>
+            <div class="text-[11px] font-semibold text-slate-700">
+              Pagina {{ currentPage }} de {{ totalPages }}
+            </div>
+            <Button
+                size="icon"
+                variant="ghost"
+                class="h-8 w-8"
+                :disabled="isLoading || currentPage === totalPages"
+                @click="nextPage"
+            >
+              <ChevronRight class="h-4 w-4" />
+            </Button>
           </div>
         </div>
       </div>
@@ -1187,13 +1247,14 @@ async function saveEdit() {
 
                             </div>
                         <Button
+                            v-if="!getProgress(r, c)?.isFinalStep"
                             size="icon"
                             variant="ghost"
                             class="h-8 w-8 shrink-0"
                             title="Editar condições"
                               @click.stop="openEdit(r, c)"
                         >
-                          <ChevronRight class="h-4 w-4" />
+                          <Pencil class="h-4 w-4" />
                           </Button>
                         </div>
 
@@ -1322,21 +1383,6 @@ async function saveEdit() {
         </div>
 
         <div class="space-y-4 p-5">
-          <div
-              v-if="edit.conditionOptions.length > 1"
-              class="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-2"
-          >
-            <div class="text-[10px] font-bold text-slate-900 uppercase tracking-wide">Condicao da transicao</div>
-            <select
-                class="h-9 w-full rounded-md border border-slate-200 bg-white px-2 text-xs"
-                :value="edit.conditionNodeKey || ''"
-                @change="(e) => changeConditionKey((e.target as HTMLSelectElement).value)"
-            >
-              <option v-for="opt in edit.conditionOptions" :key="opt.nodeKey" :value="opt.nodeKey">
-                {{ opt.label }}
-              </option>
-            </select>
-          </div>
           <!-- Evolução por Data -->
           <div class="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-3">
             <div class="flex items-center gap-2 mb-2">
@@ -1635,3 +1681,5 @@ async function saveEdit() {
     </div>
   </div>
 </template>
+
+
