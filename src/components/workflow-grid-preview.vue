@@ -14,21 +14,13 @@ import {
   Clock,
   Pencil,
   ChevronLeft,
+  RefreshCw,
 } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
-import { DatePicker } from '@/components/ui/date-picker'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Switch } from '@/components/ui/switch'
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import { CLASS_INSERT_STATUS_OPTIONS, CONTRACT_STATUS_OPTIONS, onlyWithContractFlag } from '@/lib/workflow'
+import ConditionConfigForm from '@/components/condition-config-form.vue'
+import { onlyWithContractFlag } from '@/lib/workflow'
+import type { ConditionPayload } from '@/lib/workflow'
 import { api } from '@/lib/api'
 
 type CourseSeqItem = {
@@ -37,24 +29,7 @@ type CourseSeqItem = {
   nodeId: string
 }
 
-type EditValue = {
-  startDate: string
-  endDate: string
-  evolveAt: string
-  evolutionMode: 'none' | 'specific' | 'range' | 'classEnd'
-  minAttendance: number
-  minExamGrade: number
-  mustCompleteLessons: boolean
-  checkContract: boolean
-  contractStatus: string[]
-  classInsertStatus: string
-  classExitStatus: string
-  classCheckStatus: string
-  useClassEndDate?: boolean
-  keepSameDayOfWeek?: boolean
-  isBalanced?: boolean
-  balanceStrategy?: ('occupancy' | 'gender')[]
-}
+type EditValue = ConditionPayload
 
 type EditState = {
   rowId: number
@@ -306,6 +281,17 @@ function statusConfig(status?: string) {
   return map[key] || map[s] || { label: raw, class: 'bg-slate-50 border-slate-200 text-slate-600', icon: Clock }
 }
 
+function isInProgressStatus(status?: string) {
+  const raw = String(status || '').trim()
+  if (!raw) return false
+  const normalized = raw
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[\s_]+/g, '')
+  return ['current', 'inprogress', 'emandamento', 'ea'].includes(normalized)
+}
+
 function fmtDate(d?: string) {
   if (!d) return '-'
   return new Date(d).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })
@@ -387,6 +373,43 @@ function normalizeKey(value?: string) {
     .replace(/[\s_]+/g, '')
 }
 
+function parseHandleClassId(handle?: string | null) {
+  if (!handle) return null
+  const parts = handle.split(':')
+  if (parts.length < 2) return null
+  const id = Number(parts[1])
+  return Number.isFinite(id) ? id : null
+}
+
+function resolveClassById(classId: number) {
+  for (const node of props.nodes || []) {
+    if (node.type !== 'course') continue
+    const classes = (node.data as any)?.payload?.classes || []
+    const match = classes.find((cls: any) => Number(cls.id) === classId)
+    if (match) return match
+  }
+  return null
+}
+
+function conditionRequiresContract(conditionId: string) {
+  const classIds = new Set<number>()
+  for (const edge of props.edges || []) {
+    if (edge.target === conditionId && edge.targetHandle === 'if-in') {
+      const id = parseHandleClassId(edge.sourceHandle)
+      if (id !== null) classIds.add(id)
+    }
+    if (edge.source === conditionId && (edge.sourceHandle === 'if-ok' || edge.sourceHandle === 'if-nok')) {
+      const id = parseHandleClassId(edge.targetHandle)
+      if (id !== null) classIds.add(id)
+    }
+  }
+  for (const id of classIds) {
+    const cls = resolveClassById(id)
+    if (onlyWithContractFlag(cls)) return true
+  }
+  return false
+}
+
 const courseSeq = computed(() => deriveCourseSequence(props.nodes, props.edges))
 const classMetaByName = computed(() => {
   const map = new Map<string, { dayOfWeek?: string | null; onlyWithContract?: unknown }>()
@@ -411,6 +434,11 @@ const hasLoadedRows = ref(false)
 const totalCount = ref(0)
 const pageLimit = ref(10)
 const pageOffset = ref(0)
+
+function reloadApprentices() {
+  hasLoadedRows.value = false
+  loadApprenticeWorkflows()
+}
 
 /** Accordion state */
 const expanded = ref<Set<number>>(new Set())
@@ -475,13 +503,28 @@ function eligibilityReasonLabel(code: string) {
     lessonscompletionunavailable: 'Conclusao de aulas nao disponivel',
     lessonsnotcompleted: 'Aulas nao concluidas',
     contractstatusmismatch: 'Status do contrato nao atende a condicao',
-    finalstep: 'Evolucao completa',
+    finalstep: 'Etapa final',
   }
   const key = String(code || '')
     .trim()
     .toLowerCase()
     .replace(/[\s_-]+/g, '')
   return map[key] || ''
+}
+
+function finalStepLabel(item?: ProgressItem) {
+  if (!item?.isFinalStep) return ''
+  const hasEnrollment = Boolean(String(item.className || '').trim())
+  return hasEnrollment && isInProgressStatus(item?.status) ? 'Evolucao completa' : 'Etapa final'
+}
+
+function eligibilityReasonLabelForProgress(item: ProgressItem | undefined, reason: string) {
+  const key = String(reason || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, '')
+  if (key === 'finalstep') return finalStepLabel(item) || 'Etapa final'
+  return eligibilityReasonLabel(reason)
 }
 
 function isWaitingEvolution(reasons?: string[]) {
@@ -623,6 +666,9 @@ const showNoData = computed(
 const showNoResults = computed(
   () => hasLoadedRows.value && filteredRows.value.length === 0 && isSearchActive.value,
 )
+const editRequiresContract = computed(() =>
+  edit.value?.conditionNodeKey ? conditionRequiresContract(edit.value.conditionNodeKey) : false,
+)
 const totalPages = computed(() => {
   const limit = pageLimit.value || 1
   return Math.max(1, Math.ceil(totalCount.value / limit))
@@ -711,6 +757,13 @@ function selectPrimaryContract(contracts: ApiContract[]) {
   return sorted[0] ?? contracts[0]
 }
 
+function enforceEditContractRequirement(value: EditValue, nodeKey?: string | null) {
+  if (nodeKey && conditionRequiresContract(nodeKey)) {
+    return { ...value, checkContract: true }
+  }
+  return value
+}
+
 function applyResolvedConditionToEdit(payload: Record<string, any>) {
   if (!edit.value) return
   const cleanDate = (value: any) => {
@@ -754,7 +807,7 @@ function applyResolvedConditionToEdit(payload: Record<string, any>) {
             : 'none'
     next.evolutionMode = inferred
   }
-  edit.value = { ...edit.value, value: next }
+  edit.value = { ...edit.value, value: enforceEditContractRequirement(next, edit.value.conditionNodeKey) }
 }
 
 function applyOverridePatchToEdit(payload: Record<string, any>) {
@@ -783,7 +836,8 @@ function applyOverridePatchToEdit(payload: Record<string, any>) {
   if ('balanceStrategy' in payload) {
     patch.balanceStrategy = Array.isArray(payload.balanceStrategy) ? payload.balanceStrategy : []
   }
-  edit.value = { ...edit.value, value: { ...current, ...patch } }
+  const next = enforceEditContractRequirement({ ...current, ...patch }, edit.value.conditionNodeKey)
+  edit.value = { ...edit.value, value: next }
 }
 
 async function loadOverrideMetaForEdit() {
@@ -831,6 +885,7 @@ async function openEdit(row: RowItem, course: CourseSeqItem) {
   const p = row.progress?.[courseKey]
   const options = conditionOptionsForCourse(course)
   const conditionNodeKey = defaultConditionKey(options)
+  const requiresContract = conditionNodeKey ? conditionRequiresContract(conditionNodeKey) : false
   const baseValue: EditValue = {
     startDate: '',
     endDate: p?.evolveAt || '',
@@ -838,8 +893,10 @@ async function openEdit(row: RowItem, course: CourseSeqItem) {
     evolutionMode: 'none',
     minAttendance: 100,
     minExamGrade: 0,
+    hasAttendance: false,
+    hasMinGrade: false,
     mustCompleteLessons: true,
-    checkContract: false,
+    checkContract: requiresContract,
     contractStatus: ['EA'],
     classInsertStatus: 'inProgress',
     classExitStatus: 'conclude',
@@ -847,6 +904,7 @@ async function openEdit(row: RowItem, course: CourseSeqItem) {
     useClassEndDate: false,
     keepSameDayOfWeek: false,
     isBalanced: false,
+    balanceStrategy: [],
   }
   edit.value = {
     rowId: row.id,
@@ -860,6 +918,12 @@ async function openEdit(row: RowItem, course: CourseSeqItem) {
       ...baseValue,
       ...(p?.condition || {}),
     },
+  }
+  if (edit.value?.conditionNodeKey) {
+    edit.value = {
+      ...edit.value,
+      value: enforceEditContractRequirement(edit.value.value, edit.value.conditionNodeKey),
+    }
   }
   if (edit.value) {
     const v = edit.value.value
@@ -883,14 +947,22 @@ function closeEdit() {
   edit.value = null
 }
 
-function updateEditField<T extends keyof EditValue>(key: T, value: EditValue[T]) {
-  if (!edit.value) return
-  edit.value = { ...edit.value, value: { ...edit.value.value, [key]: value } }
-}
-
 function updateEditFields(patch: Partial<EditValue>) {
   if (!edit.value) return
   edit.value = { ...edit.value, value: { ...edit.value.value, ...patch } }
+}
+
+function handleConditionPatch(patch: Partial<EditValue>) {
+  if (!edit.value) return
+  if (patch.evolutionMode) {
+    setEvolutionMode(patch.evolutionMode)
+    return
+  }
+  if (patch.checkContract !== undefined && editRequiresContract.value) {
+    updateEditFields({ ...patch, checkContract: true })
+    return
+  }
+  updateEditFields(patch)
 }
 
 function setEvolutionMode(mode: EditValue['evolutionMode']) {
@@ -918,16 +990,6 @@ function setEvolutionMode(mode: EditValue['evolutionMode']) {
     patch.endDate = ''
   }
   updateEditFields(patch)
-}
-
-function sanitizeOneToHundred(value: unknown) {
-  const raw = String(value ?? '').replace(/\D+/g, '')
-  if (!raw) return { n: 1, text: '1' }
-  const trimmed = raw.slice(0, 3)
-  let n = Number(trimmed)
-  if (!Number.isFinite(n)) n = 1
-  n = Math.min(100, Math.max(1, n))
-  return { n, text: String(n) }
 }
 
 async function saveEdit() {
@@ -970,6 +1032,7 @@ async function saveEdit() {
       }
     }
     closeEdit()
+    await loadApprenticeWorkflows()
   } catch (e) {
     console.error('Erro ao salvar override', e)
     closeEdit()
@@ -999,6 +1062,16 @@ async function saveEdit() {
               <Users class="h-3.5 w-3.5" />
               {{ totalCount }} aprendizes
             </span>
+            <Button
+                size="sm"
+                variant="outline"
+                class="h-7 px-2.5 text-[11px]"
+                :disabled="isLoading"
+                @click="reloadApprentices"
+            >
+              <RefreshCw class="h-3.5 w-3.5 mr-1.5" />
+              Recarregar
+            </Button>
           </div>
         </div>
 
@@ -1228,7 +1301,7 @@ async function saveEdit() {
                                   v-if="getProgress(r, c)?.isFinalStep"
                                   class="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[10px] font-semibold text-emerald-700"
                               >
-                                Evolucao completa
+                                {{ finalStepLabel(getProgress(r, c)) }}
                               </span>
                               <span
                                   v-if="classContractLabel(getProgress(r, c))"
@@ -1267,7 +1340,7 @@ async function saveEdit() {
                               ? getProgress(r, c)?.eligibilityReasons
                               : getProgress(r, c)?.eligibleForNextReason || []
                             )
-                              .map((reason) => eligibilityReasonLabel(reason))
+                              .map((reason) => eligibilityReasonLabelForProgress(getProgress(r, c), reason))
                               .filter(Boolean)
                               .join(', ')
                           }}
@@ -1383,286 +1456,13 @@ async function saveEdit() {
         </div>
 
         <div class="space-y-4 p-5">
-          <!-- Evolução por Data -->
-          <div class="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-3">
-            <div class="flex items-center gap-2 mb-2">
-              <Calendar class="h-4 w-4 text-slate-600" />
-              <div class="text-xs font-bold text-slate-900 uppercase tracking-wide">Evolução por data</div>
-            </div>
-            <div class="space-y-2">
-              <div class="space-y-1">
-                <Label class="text-xs text-slate-700">Tipo de evolução</Label>
-                <select
-                    class="h-9 w-full rounded-md border border-slate-200 bg-white px-2 text-xs"
-                    :value="edit.value.evolutionMode || 'none'"
-                    @change="(e) => setEvolutionMode((e.target as HTMLSelectElement).value as any)"
-                >
-                  <option value="none">Sem data (segue execução do workflow)</option>
-                  <option value="specific">Data específica</option>
-                  <option value="range">Período (início/fim)</option>
-                  <option value="classEnd">Término da turma</option>
-                </select>
-              </div>
-
-              <div v-if="edit.value.evolutionMode === 'specific'" class="space-y-1">
-                <Label class="text-xs text-slate-700">Evoluir em</Label>
-                <DatePicker
-                    :model-value="edit.value.evolveAt"
-                    @update:model-value="(value) => updateEditField('evolveAt', String(value))"
-                />
-              </div>
-
-              <div v-if="edit.value.evolutionMode === 'range'" class="space-y-2">
-                <div class="space-y-1">
-                  <Label class="text-xs text-slate-700">Data início</Label>
-                  <DatePicker
-                      :model-value="edit.value.startDate"
-                      @update:model-value="(value) => updateEditField('startDate', String(value))"
-                  />
-                </div>
-                <div class="space-y-1">
-                  <Label class="text-xs text-slate-700">Data término</Label>
-                  <DatePicker
-                      :model-value="edit.value.endDate"
-                      @update:model-value="(value) => updateEditField('endDate', String(value))"
-                  />
-                </div>
-              </div>
-
-              <div v-if="edit.value.evolutionMode === 'classEnd'" class="text-[10px] text-blue-700 bg-blue-50 border border-blue-200 rounded-lg p-2">
-                A evolução ocorrerá no término da turma.
-              </div>
-            </div>
-          </div>
-
-          <!-- Performance Criteria -->
-          <div class="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-3">
-            <div class="flex items-center gap-2 mb-2">
-              <TrendingUp class="h-4 w-4 text-slate-600" />
-              <div class="text-xs font-bold text-slate-900 uppercase tracking-wide">Critérios de Desempenho</div>
-            </div>
-            <div class="space-y-3">
-              <div class="space-y-1">
-                <Label class="text-xs text-slate-700">Presença mínima (%)</Label>
-                <Input
-                    type="number"
-                    min="1"
-                    max="100"
-                    step="1"
-                    inputmode="numeric"
-                    pattern="[0-9]*"
-                    :model-value="edit.value.minAttendance"
-                    @input="(e) => {
-                      const target = e.target as HTMLInputElement
-                      const { n, text } = sanitizeOneToHundred(target?.value)
-                      if (target) target.value = text
-                      updateEditField('minAttendance', n)
-                    }"
-                />
-              </div>
-              <div class="space-y-1">
-                <Label class="text-xs text-slate-700">Nota mínima (0-10)</Label>
-                <Input
-                    type="number"
-                    min="1"
-                    max="100"
-                    step="1"
-                    inputmode="numeric"
-                    pattern="[0-9]*"
-                    :model-value="edit.value.minExamGrade"
-                    @input="(e) => {
-                      const target = e.target as HTMLInputElement
-                      const { n, text } = sanitizeOneToHundred(target?.value)
-                      if (target) target.value = text
-                      updateEditField('minExamGrade', n)
-                    }"
-                />
-              </div>
-              <div class="flex items-center justify-between rounded-lg border bg-white p-3">
-                <div class="flex-1">
-                  <div class="text-xs font-semibold text-slate-900">Aulas completas</div>
-                  <div class="text-[10px] text-slate-600">Exigir todas as aulas</div>
-                </div>
-                <Switch
-                    :checked="!!edit.value.mustCompleteLessons"
-                    @update:checked="(value) => updateEditField('mustCompleteLessons', value)"
-                />
-              </div>
-            </div>
-          </div>
-
-          <!-- Status na Turma -->
-          <div class="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-3">
-            <div class="flex items-center gap-2 mb-2">
-              <Users class="h-4 w-4 text-slate-600" />
-              <div class="text-xs font-bold text-slate-900 uppercase tracking-wide">Status na Turma</div>
-            </div>
-            <div class="space-y-2">
-              <div class="space-y-1">
-                <Label class="text-xs text-slate-700">Checar status na turma</Label>
-                <select
-                    class="h-9 w-full rounded-md border border-slate-200 bg-white px-2 text-xs"
-                    :value="edit.value.classCheckStatus || ''"
-                    @change="(e) => updateEditField('classCheckStatus', (e.target as HTMLSelectElement).value)"
-                >
-                  <option value="">Nao filtrar</option>
-                  <option v-for="opt in CLASS_INSERT_STATUS_OPTIONS" :key="opt.value" :value="opt.value">
-                    {{ opt.label }}
-                  </option>
-                </select>
-                <div class="text-[10px] text-slate-600">Somente matriculados com este status</div>
-              </div>
-              <div class="space-y-1">
-                <Label class="text-xs text-slate-700">Status na turma atual</Label>
-                <select
-                    class="h-9 w-full rounded-md border border-slate-200 bg-white px-2 text-xs"
-                    :value="edit.value.classExitStatus || ''"
-                    @change="(e) => updateEditField('classExitStatus', (e.target as HTMLSelectElement).value)"
-                >
-                  <option value="">Nao definir</option>
-                  <option v-for="opt in CLASS_INSERT_STATUS_OPTIONS" :key="opt.value" :value="opt.value">
-                    {{ opt.label }}
-                  </option>
-                </select>
-              </div>
-              <div class="space-y-1">
-                <Label class="text-xs text-slate-700">Status na turma destino</Label>
-                <select
-                    class="h-9 w-full rounded-md border border-slate-200 bg-white px-2 text-xs"
-                    :value="edit.value.classInsertStatus || ''"
-                    @change="(e) => updateEditField('classInsertStatus', (e.target as HTMLSelectElement).value)"
-                >
-                  <option value="">Nao definir</option>
-                  <option v-for="opt in CLASS_INSERT_STATUS_OPTIONS" :key="opt.value" :value="opt.value">
-                    {{ opt.label }}
-                  </option>
-                </select>
-              </div>
-            </div>
-          </div>
-
-          <!-- Manter dia da semana -->
-          <div class="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-3">
-            <div class="flex items-center justify-between">
-              <div class="flex items-center gap-2">
-                <Calendar class="h-4 w-4 text-slate-600" />
-                <div>
-                  <div class="text-xs font-bold text-slate-900">Manter dia da semana</div>
-                  <div class="text-[10px] text-slate-600">SEGUNDA -> SEGUNDA</div>
-                </div>
-              </div>
-              <Switch
-                  :checked="!!edit.value.keepSameDayOfWeek"
-                  @update:checked="(value) => updateEditField('keepSameDayOfWeek', value)"
-              />
-            </div>
-          </div>
-
-          <!-- Contract Check -->
-          <div class="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-3">
-            <div class="flex items-center justify-between">
-              <div class="flex items-center gap-2">
-                <FileText class="h-4 w-4 text-slate-600" />
-                <div>
-                  <div class="text-xs font-bold text-slate-900">Verificar Contrato</div>
-                  <div class="text-[10px] text-slate-600">Validar status contratual</div>
-                </div>
-              </div>
-              <Switch
-                  :checked="!!edit.value.checkContract"
-                  @update:checked="(value) => updateEditField('checkContract', value)"
-              />
-            </div>
-
-            <div v-if="edit.value.checkContract" class="space-y-1.5 pt-2 border-t">
-              <Label class="text-[10px] text-slate-700 uppercase tracking-wide">Status aceitos</Label>
-              <div class="space-y-1">
-                <label
-                    v-for="opt in CONTRACT_STATUS_OPTIONS"
-                    :key="opt.value"
-                    class="flex items-center gap-2 rounded-lg border bg-white p-2 cursor-pointer hover:bg-slate-50"
-                >
-                  <input
-                      type="checkbox"
-                      :id="`grid-status-${opt.value}`"
-                      :checked="edit.value.contractStatus?.includes(opt.value)"
-                      @change="(e) => {
-                      const checked = (e.target as HTMLInputElement).checked
-                      const current = [...(edit.value.contractStatus || [])]
-                      if (checked) {
-                        if (!current.includes(opt.value)) current.push(opt.value)
-                      } else {
-                        const idx = current.indexOf(opt.value)
-                        if (idx !== -1) current.splice(idx, 1)
-                      }
-                      updateEditField('contractStatus', current)
-                    }"
-                      class="h-4 w-4 rounded border-2"
-                  />
-                  <span class="text-xs text-slate-900">{{ opt.label }}</span>
-                </label>
-              </div>
-            </div>
-          </div>
-
-          <!-- Load Balancing -->
-          <div class="rounded-xl border border-blue-200 bg-blue-50 p-4 space-y-3">
-            <div class="flex items-center justify-between">
-              <div class="flex items-center gap-2">
-                <Scale class="h-4 w-4 text-blue-600" />
-                <div>
-                  <div class="text-xs font-bold text-blue-900">Balanceamento</div>
-                  <div class="text-[10px] text-blue-700">Distribuir entre turmas</div>
-                </div>
-              </div>
-              <Switch :checked="!!edit.value.isBalanced" @update:checked="(value) => updateEditField('isBalanced', value)" />
-            </div>
-
-            <div v-if="edit.value.isBalanced" class="space-y-2 pt-2 border-t border-blue-200">
-              <Label class="text-[10px] text-blue-900 uppercase tracking-wide">Estratégias</Label>
-              <div class="space-y-1.5">
-                <label class="flex items-center gap-2 p-2.5 rounded-lg border border-blue-200 bg-white cursor-pointer hover:bg-blue-50">
-                  <input
-                      type="checkbox"
-                      :checked="edit.value.balanceStrategy?.includes('occupancy')"
-                      @change="(e) => {
-                      const checked = (e.target as HTMLInputElement).checked
-                      const current = [...(edit.value.balanceStrategy || [])]
-                      if (checked) {
-                        if (!current.includes('occupancy')) current.push('occupancy')
-                      } else {
-                        const idx = current.indexOf('occupancy')
-                        if (idx !== -1) current.splice(idx, 1)
-                      }
-                      updateEditField('balanceStrategy', current)
-                    }"
-                      class="h-4 w-4 rounded border-2"
-                  />
-                  <span class="text-xs font-medium text-slate-900">Menor Ocupação Geral</span>
-                </label>
-
-                <label class="flex items-center gap-2 p-2.5 rounded-lg border border-blue-200 bg-white cursor-pointer hover:bg-blue-50">
-                  <input
-                      type="checkbox"
-                      :checked="edit.value.balanceStrategy?.includes('gender')"
-                      @change="(e) => {
-                      const checked = (e.target as HTMLInputElement).checked
-                      const current = [...(edit.value.balanceStrategy || [])]
-                      if (checked) {
-                        if (!current.includes('gender')) current.push('gender')
-                      } else {
-                        const idx = current.indexOf('gender')
-                        if (idx !== -1) current.splice(idx, 1)
-                      }
-                      updateEditField('balanceStrategy', current)
-                    }"
-                      class="h-4 w-4 rounded border-2"
-                  />
-                  <span class="text-xs font-medium text-slate-900">Equilíbrio de Gênero (H/M/O)</span>
-                </label>
-              </div>
-            </div>
-          </div>
+          <ConditionConfigForm
+              v-if="edit"
+              :value="edit.value"
+              :requires-contract="editRequiresContract"
+              id-prefix="apprentice-override"
+              @update="handleConditionPatch"
+          />
 
           <!-- Actions -->
           <div class="flex items-center gap-2 pt-2">
@@ -1681,5 +1481,6 @@ async function saveEdit() {
     </div>
   </div>
 </template>
+
 
 
