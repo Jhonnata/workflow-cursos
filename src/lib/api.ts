@@ -101,6 +101,15 @@ export const api = {
     const id = encodeURIComponent(String(workflowId))
     return tryFetch(`${BASE_URL}/workflows/${id}/graphs`)
   },
+  async runWorkflow(workflowId: string | number, runId?: string | number) {
+    const id = encodeURIComponent(String(workflowId))
+    const query =
+      runId !== undefined && runId !== null && runId !== '' ? `?runId=${encodeURIComponent(String(runId))}` : ''
+    return tryFetch(`${BASE_URL}/workflows/${id}/run${query}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    })
+  },
   async getApprenticeWorkflows(
     workflowId: string | number,
     params?: {

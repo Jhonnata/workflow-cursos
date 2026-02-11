@@ -28,6 +28,7 @@ export type ConditionPayload = {
   minAttendance: number
   minExamGrade: number
   mustCompleteLessons: boolean
+  countJustifiedAbsences: boolean
   checkContract: boolean
   contractStatus: string[]
   classInsertStatus: string

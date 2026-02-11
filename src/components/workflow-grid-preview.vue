@@ -18,6 +18,7 @@ import {
 } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { useToast } from '@/components/ui/toast'
 import ConditionConfigForm from '@/components/condition-config-form.vue'
 import { onlyWithContractFlag } from '@/lib/workflow'
 import type { ConditionPayload } from '@/lib/workflow'
@@ -44,6 +45,7 @@ type EditState = {
 
 type ProgressItem = {
   className?: string
+  classNodeKey?: string
   status?: string
   attendance?: number
   exam?: number
@@ -78,7 +80,7 @@ type ApiStep = {
   order?: number
   courseId?: number
   courseName?: string
-  class?: { id?: number; name?: string; identifier?: string }
+  class?: { id?: number; name?: string; identifier?: string; nodeKey?: string }
   status?: string
   isFinalStep?: boolean
 }
@@ -297,6 +299,36 @@ function fmtDate(d?: string) {
   return new Date(d).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })
 }
 
+function contractDurationLabel(start?: string, end?: string) {
+  if (!start) return ''
+  const startDate = new Date(start)
+  if (Number.isNaN(startDate.getTime())) return ''
+  const endDate = end ? new Date(end) : new Date()
+  if (Number.isNaN(endDate.getTime())) return ''
+  let months =
+    (endDate.getFullYear() - startDate.getFullYear()) * 12 +
+    (endDate.getMonth() - startDate.getMonth())
+  if (endDate.getDate() < startDate.getDate()) months -= 1
+  if (months < 0) months = 0
+  return `${months} meses`
+}
+
+function contractElapsedLabel(start?: string, end?: string) {
+  if (!start) return ''
+  const startDate = new Date(start)
+  if (Number.isNaN(startDate.getTime())) return ''
+  const now = new Date()
+  const endDate = end ? new Date(end) : now
+  const effectiveEnd = endDate.getTime() < now.getTime() ? endDate : now
+  if (Number.isNaN(effectiveEnd.getTime())) return ''
+  let months =
+    (effectiveEnd.getFullYear() - startDate.getFullYear()) * 12 +
+    (effectiveEnd.getMonth() - startDate.getMonth())
+  if (effectiveEnd.getDate() < startDate.getDate()) months -= 1
+  if (months < 0) months = 0
+  return `${months} meses`
+}
+
 function formatDayOfWeek(value?: string | null) {
   if (!value) return ''
   const raw = String(value || '').trim()
@@ -430,14 +462,40 @@ const classMetaByName = computed(() => {
 const rows = ref<RowItem[]>([])
 const edit = ref<EditState | null>(null)
 const searchQuery = ref('')
+const runId = ref('')
 const hasLoadedRows = ref(false)
 const totalCount = ref(0)
 const pageLimit = ref(10)
 const pageOffset = ref(0)
+const isRunningEvolution = ref(false)
+const { toast } = useToast()
 
 function reloadApprentices() {
   hasLoadedRows.value = false
   loadApprenticeWorkflows()
+}
+
+async function runEvolution() {
+  if (!props.workflowId || isRunningEvolution.value) return
+  isRunningEvolution.value = true
+  try {
+    const runIdValue = runId.value.trim()
+    await api.runWorkflow(props.workflowId, runIdValue || undefined)
+    toast({
+      title: 'Evolucao executada',
+      description: 'A execucao foi disparada com sucesso.',
+    })
+    await loadApprenticeWorkflows()
+  } catch (e) {
+    console.error('Erro ao executar evolucao', e)
+    toast({
+      title: 'Erro ao executar evolucao',
+      description: formatApiError(e),
+      variant: 'destructive',
+    })
+  } finally {
+    isRunningEvolution.value = false
+  }
 }
 
 /** Accordion state */
@@ -492,6 +550,7 @@ function eligibilityReasonLabel(code: string) {
     nocurrentstep: 'Sem etapa atual',
     notcurrentstep: 'Aguardando evolucao',
     noconditionforstep: 'Sem condicao definida para a etapa',
+    noconditionforclass: 'Condicoes ligadas, mas nenhuma aplicavel a turma atual',
     conditionnotfound: 'Condicao nao encontrada',
     classstatusmismatch: 'Status da turma nao atende a condicao',
     classnotended: 'Turma ainda nao finalizada',
@@ -531,6 +590,27 @@ function isWaitingEvolution(reasons?: string[]) {
   return (reasons || []).some((reason) => eligibilityReasonLabel(reason) === 'Aguardando evolucao')
 }
 
+function formatApiError(e: unknown) {
+  const err = e as any
+  const payload = err?.payload
+  const messageFromPayload =
+    typeof payload?.messages?.error === 'string' && payload.messages.error.trim()
+      ? payload.messages.error.trim()
+      : typeof payload?.message === 'string' && payload.message.trim()
+        ? payload.message.trim()
+        : ''
+  const messageFromError =
+    typeof err?.message === 'string' && err.message.trim() ? err.message.trim() : ''
+  const errors = Array.isArray(err?.errors)
+    ? err.errors.map((item: any) => String(item)).filter(Boolean)
+    : []
+  const parts = []
+  if (messageFromPayload) parts.push(messageFromPayload)
+  if (errors.length) parts.push(...errors)
+  if (parts.length) return parts.join(' | ')
+  return messageFromError || 'Erro inesperado.'
+}
+
 async function loadApprenticeWorkflows() {
   if (props.workflowId === undefined || props.workflowId === null || props.workflowId === '') {
     rows.value = []
@@ -568,6 +648,7 @@ async function loadApprenticeWorkflows() {
         const eligibility = step?.eligibility || {}
         const entry = {
           className: step?.class?.name ?? undefined,
+          classNodeKey: step?.class?.nodeKey ?? undefined,
           status: step?.status ?? undefined,
           attendance: Number.isFinite(attendance as number) ? (attendance as number) : undefined,
           exam: Number.isFinite(exam as number) ? (exam as number) : undefined,
@@ -627,7 +708,14 @@ async function loadApprenticeWorkflows() {
   }
 }
 
-onMounted(loadApprenticeWorkflows)
+onMounted(() => {
+  if (typeof window !== 'undefined') {
+    const params = new URLSearchParams(window.location.search)
+    const initialRunId = params.get('runId')
+    if (initialRunId) runId.value = initialRunId
+  }
+  loadApprenticeWorkflows()
+})
 
 watch(
   () => props.workflowId,
@@ -782,6 +870,9 @@ function applyResolvedConditionToEdit(payload: Record<string, any>) {
     minAttendance: Number(payload.minAttendance ?? current.minAttendance ?? 100),
     minExamGrade: Number(payload.minExamGrade ?? current.minExamGrade ?? 0),
     mustCompleteLessons: !!(payload.mustCompleteLessons ?? current.mustCompleteLessons),
+    countJustifiedAbsences: !!(
+      payload.countJustifiedAbsences ?? current.countJustifiedAbsences
+    ),
     checkContract: !!(payload.checkContract ?? current.checkContract),
     contractStatus: Array.isArray(payload.contractStatus) ? payload.contractStatus : (current.contractStatus || []),
     classInsertStatus: String(payload.classInsertStatus ?? current.classInsertStatus ?? 'inProgress'),
@@ -810,36 +901,6 @@ function applyResolvedConditionToEdit(payload: Record<string, any>) {
   edit.value = { ...edit.value, value: enforceEditContractRequirement(next, edit.value.conditionNodeKey) }
 }
 
-function applyOverridePatchToEdit(payload: Record<string, any>) {
-  if (!edit.value) return
-  const current = edit.value.value
-  const patch: Partial<EditValue> = {}
-  if ('startDate' in payload) patch.startDate = String(payload.startDate ?? '')
-  if ('endDate' in payload) patch.endDate = String(payload.endDate ?? '')
-  if ('evolveAt' in payload) patch.evolveAt = String(payload.evolveAt ?? '')
-  if ('evolutionMode' in payload) patch.evolutionMode = payload.evolutionMode
-  if ('minAttendance' in payload) patch.minAttendance = Number(payload.minAttendance)
-  if ('minExamGrade' in payload) patch.minExamGrade = Number(payload.minExamGrade)
-  if ('mustCompleteLessons' in payload) patch.mustCompleteLessons = !!payload.mustCompleteLessons
-  if ('checkContract' in payload) patch.checkContract = !!payload.checkContract
-  if ('contractStatus' in payload) {
-    patch.contractStatus = Array.isArray(payload.contractStatus) ? payload.contractStatus : []
-  }
-  if ('classInsertStatus' in payload) patch.classInsertStatus = String(payload.classInsertStatus || '')
-  if ('classExitStatus' in payload) patch.classExitStatus = String(payload.classExitStatus || '')
-  if ('classCheckStatus' in payload) patch.classCheckStatus = String(payload.classCheckStatus || '')
-  if ('hasMinGrade' in payload) patch.hasMinGrade = !!payload.hasMinGrade
-  if ('hasAttendance' in payload) patch.hasAttendance = !!payload.hasAttendance
-  if ('useClassEndDate' in payload) patch.useClassEndDate = !!payload.useClassEndDate
-  if ('keepSameDayOfWeek' in payload) patch.keepSameDayOfWeek = !!payload.keepSameDayOfWeek
-  if ('isBalanced' in payload) patch.isBalanced = !!payload.isBalanced
-  if ('balanceStrategy' in payload) {
-    patch.balanceStrategy = Array.isArray(payload.balanceStrategy) ? payload.balanceStrategy : []
-  }
-  const next = enforceEditContractRequirement({ ...current, ...patch }, edit.value.conditionNodeKey)
-  edit.value = { ...edit.value, value: next }
-}
-
 async function loadOverrideMetaForEdit() {
   if (!edit.value) return
   if (!props.workflowId || !edit.value.conditionNodeKey) return
@@ -848,9 +909,6 @@ async function loadOverrideMetaForEdit() {
     const list = Array.isArray(res.data) ? res.data : []
     const match = list.find((item: any) => String(item.nodeKey) === String(edit.value?.conditionNodeKey))
     edit.value = { ...edit.value, overrideId: match?.id ? Number(match.id) : null }
-    if (match?.override && typeof match.override === 'object') {
-      applyOverridePatchToEdit(match.override as Record<string, any>)
-    }
   } catch (e) {
     console.error('Erro ao buscar overrides', e)
   }
@@ -884,7 +942,11 @@ async function openEdit(row: RowItem, course: CourseSeqItem) {
   const courseKey = resolveProgressKey(row, course)
   const p = row.progress?.[courseKey]
   const options = conditionOptionsForCourse(course)
-  const conditionNodeKey = defaultConditionKey(options)
+  const classNodeKey = String(p?.classNodeKey || '').trim()
+  if (classNodeKey && !options.some((opt) => opt.nodeKey === classNodeKey)) {
+    options.unshift({ nodeKey: classNodeKey, label: 'Condicao da turma' })
+  }
+  const conditionNodeKey = classNodeKey || defaultConditionKey(options)
   const requiresContract = conditionNodeKey ? conditionRequiresContract(conditionNodeKey) : false
   const baseValue: EditValue = {
     startDate: '',
@@ -896,6 +958,7 @@ async function openEdit(row: RowItem, course: CourseSeqItem) {
     hasAttendance: false,
     hasMinGrade: false,
     mustCompleteLessons: true,
+    countJustifiedAbsences: false,
     checkContract: requiresContract,
     contractStatus: ['EA'],
     classInsertStatus: 'inProgress',
@@ -1003,6 +1066,7 @@ async function saveEdit() {
     minAttendance: edit.value.value.minAttendance,
     minExamGrade: edit.value.value.minExamGrade,
     mustCompleteLessons: edit.value.value.mustCompleteLessons,
+    countJustifiedAbsences: !!edit.value.value.countJustifiedAbsences,
     checkContract: edit.value.value.checkContract,
     contractStatus: edit.value.value.contractStatus || [],
     classInsertStatus: edit.value.value.classInsertStatus,
@@ -1032,9 +1096,18 @@ async function saveEdit() {
       }
     }
     closeEdit()
+    toast({
+      title: 'Condicao atualizada',
+      description: 'A sobrescricao do aprendiz foi salva com sucesso.',
+    })
     await loadApprenticeWorkflows()
   } catch (e) {
     console.error('Erro ao salvar override', e)
+    toast({
+      title: 'Erro ao salvar condicao',
+      description: formatApiError(e),
+      variant: 'destructive',
+    })
     closeEdit()
   }
 }
@@ -1062,11 +1135,28 @@ async function saveEdit() {
               <Users class="h-3.5 w-3.5" />
               {{ totalCount }} aprendizes
             </span>
+            <Input
+                v-model="runId"
+                placeholder="runId (opcional)"
+                class="h-7 w-32 text-[11px]"
+            />
+            <Button
+                size="sm"
+                class="h-7 px-2.5 text-[11px] bg-blue-600 hover:bg-blue-700"
+                :disabled="isLoading || isRunningEvolution"
+                @click="runEvolution"
+            >
+              <span
+                  v-if="isRunningEvolution"
+                  class="mr-1.5 h-3.5 w-3.5 animate-spin rounded-full border border-white/60 border-t-white"
+              ></span>
+              {{ isRunningEvolution ? 'Executando...' : 'Executar evolucao' }}
+            </Button>
             <Button
                 size="sm"
                 variant="outline"
                 class="h-7 px-2.5 text-[11px]"
-                :disabled="isLoading"
+                :disabled="isLoading || isRunningEvolution"
                 @click="reloadApprentices"
             >
               <RefreshCw class="h-3.5 w-3.5 mr-1.5" />
@@ -1187,6 +1277,18 @@ async function saveEdit() {
                     <div class="flex items-center gap-1 text-[10px] text-slate-600 mb-1">
                       <Calendar class="h-3 w-3" />
                       <span>{{ fmtDate(r.contract.start) }} → {{ fmtDate(r.contract.end) }}</span>
+                    </div>
+                      <div
+                          v-if="contractDurationLabel(r.contract.start, r.contract.end)"
+                          class="text-[10px] text-slate-600 mb-1"
+                      >
+                        Tempo: {{ contractDurationLabel(r.contract.start, r.contract.end) }}
+                      </div>
+                    <div
+                        v-if="contractElapsedLabel(r.contract.start, r.contract.end)"
+                        class="text-[10px] text-slate-600 mb-1"
+                    >
+                      Em andamento: {{ contractElapsedLabel(r.contract.start, r.contract.end) }}
                     </div>
                     <span
                         :class="statusConfig(r.contract.status).class"
