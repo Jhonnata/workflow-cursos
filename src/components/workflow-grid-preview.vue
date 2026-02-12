@@ -1457,7 +1457,7 @@ async function saveEdit() {
                                   class="text-lg font-bold"
                                   :class="(getProgress(r, c)?.attendance ?? 0) >= 85 ? 'text-emerald-600' : 'text-rose-600'"
                               >
-                                {{ getProgress(r, c)?.attendance?.toFixed(1) || '-' }}
+                                {{ getProgress(r, c)?.attendance || '-' }}
                               </span>
                             <span class="text-xs text-slate-500">%</span>
                           </div>

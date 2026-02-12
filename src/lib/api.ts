@@ -1,10 +1,17 @@
 import { mockCatalog } from './workflow'
+import { API_BASE_URL } from './config'
+import { getStoredAuth } from './auth'
 
-const BASE_URL = 'http://api.masa.io'
+const BASE_URL = API_BASE_URL
 
 async function tryFetch(url: string, options?: RequestInit, fallbackData?: any) {
   try {
-    const res = await fetch(url, options)
+    const headers = new Headers(options?.headers || {})
+    const auth = getStoredAuth()
+    if (auth && !headers.has('Authorization')) {
+      headers.set('Authorization', `${auth.type} ${auth.token}`)
+    }
+    const res = await fetch(url, { ...options, headers })
     if (!res.ok) {
       const contentType = res.headers.get('content-type') || ''
       let payload: any = null
