@@ -5,6 +5,7 @@ import monacoEditorPlugin from 'vite-plugin-monaco-editor'
 
 // https://vitejs.dev/config/
 export default defineConfig({
+  base: '/workflow-cursos/',
   plugins: [
     vue(),
     /* @ts-ignore */

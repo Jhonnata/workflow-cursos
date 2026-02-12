@@ -1,4 +1,4 @@
-import { createRouter, createWebHistory } from 'vue-router'
+import { createRouter, createWebHashHistory } from 'vue-router'
 import WorkflowEditor from '@/components/workflow-editor.vue'
 import LoginPage from '@/components/login-page.vue'
 import { isLoggedIn } from '@/lib/auth'
@@ -6,7 +6,7 @@ import { isLoggedIn } from '@/lib/auth'
 const flowId = 'workflow-editor'
 
 const router = createRouter({
-  history: createWebHistory(),
+  history: createWebHashHistory(import.meta.env.BASE_URL),
   routes: [
     {
       path: '/login',
