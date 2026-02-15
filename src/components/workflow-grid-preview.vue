@@ -46,6 +46,7 @@ type EditState = {
 type ProgressItem = {
   className?: string
   classNodeKey?: string
+  hasEnrollment?: boolean
   status?: string
   attendance?: number
   exam?: number
@@ -80,6 +81,8 @@ type ApiStep = {
   order?: number
   courseId?: number
   courseName?: string
+  className?: string
+  classNodeKey?: string
   class?: { id?: number; name?: string; identifier?: string; nodeKey?: string }
   status?: string
   isFinalStep?: boolean
@@ -533,13 +536,13 @@ function countIneligibleSteps(r: RowItem) {
 }
 
 function classDayLabel(item?: ProgressItem) {
-  if (!item?.className) return ''
+  if (!item?.hasEnrollment || !item?.className) return ''
   const meta = classMetaByName.value.get(item.className)
   return formatDayOfWeek(meta?.dayOfWeek ?? '')
 }
 
 function classContractLabel(item?: ProgressItem) {
-  if (!item?.className) return ''
+  if (!item?.hasEnrollment || !item?.className) return ''
   const meta = classMetaByName.value.get(item.className)
   if (!meta) return ''
   return onlyWithContractFlag({ onlyWithContract: meta.onlyWithContract }) ? 'Contrato' : 'Livre'
@@ -548,20 +551,20 @@ function classContractLabel(item?: ProgressItem) {
 function eligibilityReasonLabel(code: string) {
   const map: Record<string, string> = {
     nocurrentstep: 'Sem etapa atual',
-    notcurrentstep: 'Aguardando evolucao',
-    noconditionforstep: 'Sem condicao definida para a etapa',
-    noconditionforclass: 'Condicoes ligadas, mas nenhuma aplicavel a turma atual',
-    conditionnotfound: 'Condicao nao encontrada',
-    classstatusmismatch: 'Status da turma nao atende a condicao',
-    classnotended: 'Turma ainda nao finalizada',
-    beforespecificdate: 'Data especifica ainda nao atingida',
-    attendanceunavailable: 'Frequencia nao disponivel',
-    attendancebelowminimum: 'Frequencia abaixo do minimo',
-    examunavailable: 'Nota nao disponivel',
-    exambelowminimum: 'Nota abaixo do minimo',
-    lessonscompletionunavailable: 'Conclusao de aulas nao disponivel',
-    lessonsnotcompleted: 'Aulas nao concluidas',
-    contractstatusmismatch: 'Status do contrato nao atende a condicao',
+    notcurrentstep: 'Aguardando evolução',
+    noconditionforstep: 'Sem condição definida para a etapa',
+    noconditionforclass: 'Condicões ligadas, mas nenhuma aplicável a turma atual',
+    conditionnotfound: 'Condição não encontrada',
+    classstatusmismatch: 'Status da turma não atende a condicão',
+    classnotended: 'Turma ainda não finalizada',
+    beforespecificdate: 'Data específica ainda não atingida',
+    attendanceunavailable: 'Frequência não disponível',
+    attendancebelowminimum: 'Frequência abaixo do mínimo',
+    examunavailable: 'Nota nao disponível',
+    exambelowminimum: 'Nota abaixo do mínimo',
+    lessonscompletionunavailable: 'Conclusão de aulas nao disponível',
+    lessonsnotcompleted: 'Aulas não concluidas',
+    contractstatusmismatch: 'Status do contrato não atende a condicão',
     finalstep: 'Etapa final',
   }
   const key = String(code || '')
@@ -573,7 +576,7 @@ function eligibilityReasonLabel(code: string) {
 
 function finalStepLabel(item?: ProgressItem) {
   if (!item?.isFinalStep) return ''
-  const hasEnrollment = Boolean(String(item.className || '').trim())
+  const hasEnrollment = item?.hasEnrollment === true
   return hasEnrollment && isInProgressStatus(item?.status) ? 'Evolucao completa' : 'Etapa final'
 }
 
@@ -587,7 +590,13 @@ function eligibilityReasonLabelForProgress(item: ProgressItem | undefined, reaso
 }
 
 function isWaitingEvolution(reasons?: string[]) {
-  return (reasons || []).some((reason) => eligibilityReasonLabel(reason) === 'Aguardando evolucao')
+  return (reasons || []).some((reason) => {
+    const key = String(reason || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[\s_-]+/g, '')
+    return key === 'notcurrentstep'
+  })
 }
 
 function formatApiError(e: unknown) {
@@ -640,15 +649,30 @@ async function loadApprenticeWorkflows() {
       for (const step of steps) {
         const key = String(step?.courseName || '').trim()
         if (!key) continue
+        const classInfo = step?.class && typeof step.class === 'object' ? step.class : null
+        const hasEnrollment = Boolean(
+          classInfo &&
+            ((classInfo?.id !== undefined && classInfo?.id !== null) ||
+              String(classInfo?.nodeKey || '').trim() ||
+              String(classInfo?.name || '').trim()),
+        )
+      /*  const className = hasEnrollment
+          ? String(classInfo?.name ?? step?.className ?? '').trim() || undefined
+          : undefined*/
+        const className = String(classInfo?.name ?? step?.className ?? '').trim()
+        const classNodeKey = hasEnrollment
+          ? String(classInfo?.nodeKey ?? step?.classNodeKey ?? '').trim() || undefined
+          : undefined
         const stats = step?.class?.stats || {}
-        const attendanceRaw = stats.actual_attendance_percentage ?? stats.attendance_record_percentage
+        const attendanceRaw = stats.completion_percentage ?? stats.attendance_record_percentage
         const examRaw = stats.overall_average ?? stats.overall_performance
         const attendance = attendanceRaw !== undefined ? Number(attendanceRaw) : undefined
         const exam = examRaw !== undefined ? Number(examRaw) : undefined
         const eligibility = step?.eligibility || {}
         const entry = {
-          className: step?.class?.name ?? undefined,
-          classNodeKey: step?.class?.nodeKey ?? undefined,
+          className,
+          classNodeKey,
+          hasEnrollment,
           status: step?.status ?? undefined,
           attendance: Number.isFinite(attendance as number) ? (attendance as number) : undefined,
           exam: Number.isFinite(exam as number) ? (exam as number) : undefined,
@@ -1382,7 +1406,7 @@ async function saveEdit() {
                                 {{ statusConfig(getProgress(r, c)?.status).label }}
                               </span>
                               <span
-                                  v-if="!getProgress(r, c)?.isFinalStep && (getProgress(r, c)?.eligibilityAny === true)"
+                                  v-if="!getProgress(r, c)?.isFinalStep && (getProgress(r, c)?.eligibilityAny === true) && isInProgressStatus(getProgress(r, c)?.status)"
                                   class="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[10px] font-semibold text-emerald-700  mb-1"
                               >
                                 Elegivel
