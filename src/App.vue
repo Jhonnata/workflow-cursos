@@ -4,7 +4,7 @@ import { RouterView } from 'vue-router'
 import { Toaster } from '@/components/ui/toast'
 </script>
 
-<template>
+<template>   
   <div class="absolute bottom-0 left-0 right-0 top-0">
     <div class="relative flex h-full w-full flex-col">
       <header class="h-20 border-b border-gray-200 px-4 py-3 " style="display: none">
