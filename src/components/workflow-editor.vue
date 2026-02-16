@@ -160,6 +160,7 @@ const preselect = ref<Record<number, Set<number>>>({})
 const connectMode = ref(false)
 const selectedNodeId = ref<string | null>(null)
 const selectedEdgeId = ref<string | null>(null)
+const rightPanelCollapsed = ref(false)
 const mainTab = ref<'workflow' | 'evolution'>('workflow')
 const workflowMode = ref<'list' | 'editor'>('list')
 const conditionDetailsOpenId = ref<string | null>(null)
@@ -511,8 +512,9 @@ watch(
 )
 
 function toggleConditionDetails(nodeId: string) {
-  conditionDetailsOpenId.value =
-      conditionDetailsOpenId.value === nodeId ? null : nodeId
+  const willOpen = conditionDetailsOpenId.value !== nodeId
+  conditionDetailsOpenId.value = willOpen ? nodeId : null
+  if (willOpen && rightPanelCollapsed.value) rightPanelCollapsed.value = false
 }
 
 function syncNodeMeta() {
@@ -1417,7 +1419,11 @@ function updateSelectedStart(patch: Partial<StartPayload>) {
             </Dialog>
           </div>
         </div>
-        <div v-else class="grid h-full min-h-0 grid-cols-[320px_1fr_300px] gap-0 border rounded-2xl overflow-hidden">
+        <div
+            v-else
+            class="grid h-full min-h-0 gap-0 border rounded-2xl overflow-hidden"
+            :class="rightPanelCollapsed ? 'grid-cols-[320px_1fr_56px]' : 'grid-cols-[320px_1fr_300px]'"
+        >
           <div class="h-full bg-muted/30 border-r min-h-0 overflow-hidden">
 
             <ScrollArea class="h-full w-full">
@@ -1698,7 +1704,21 @@ function updateSelectedStart(patch: Partial<StartPayload>) {
             </div>
           </div>
 
-          <div class="h-full bg-muted/30 border-l p-4 overflow-auto min-h-0">
+          <div
+              class="h-full bg-muted/30 border-l min-h-0"
+              :class="rightPanelCollapsed ? 'flex items-start justify-center pt-4' : 'overflow-auto p-4'"
+          >
+            <Button
+                size="icon"
+                variant="ghost"
+                class="h-8 w-8 shrink-0"
+                :title="rightPanelCollapsed ? 'Expandir painel de configuracao' : 'Recolher painel de configuracao'"
+                @click="rightPanelCollapsed = !rightPanelCollapsed"
+            >
+              <ChevronRight class="h-4 w-4 transition-transform" :class="rightPanelCollapsed ? '' : 'rotate-180'"/>
+            </Button>
+
+            <template v-if="!rightPanelCollapsed">
 
             <div v-if="activeWorkflow" class="mb-4 rounded-2xl border bg-white shadow-sm">
               <div class="p-4">
@@ -1865,6 +1885,7 @@ function updateSelectedStart(patch: Partial<StartPayload>) {
                 </div>
               </div>
             </div>
+            </template>
           </div>
         </div>
       </div>

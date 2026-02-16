@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { GraphEdge, GraphNode } from '@vue-flow/core'
 import {
   ChevronRight,
@@ -83,9 +83,22 @@ type ApiStep = {
   courseName?: string
   className?: string
   classNodeKey?: string
-  class?: { id?: number; name?: string; identifier?: string; nodeKey?: string }
+  class?: {
+    id?: number
+    name?: string
+    identifier?: string
+    nodeKey?: string
+    stats?: Record<string, unknown>
+  }
   status?: string
   isFinalStep?: boolean
+  eligibleForNext?: boolean | null
+  eligibleForNextReason?: string[]
+  eligibility?: {
+    anyEligible?: boolean | null
+    reasons?: string[]
+    byCondition?: { nodeKey?: string; eligible?: boolean; reasons?: string[] }[]
+  }
 }
 
 type ApiApprentice = {
@@ -408,6 +421,15 @@ function normalizeKey(value?: string) {
     .replace(/[\s_]+/g, '')
 }
 
+function parseStatNumber(value: unknown) {
+  if (value === undefined || value === null || value === '') return undefined
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined
+  const normalized = String(value).trim().replace(',', '.')
+  if (!normalized) return undefined
+  const num = Number(normalized)
+  return Number.isFinite(num) ? num : undefined
+}
+
 function parseHandleClassId(handle?: string | null) {
   if (!handle) return null
   const parts = handle.split(':')
@@ -471,9 +493,14 @@ const totalCount = ref(0)
 const pageLimit = ref(10)
 const pageOffset = ref(0)
 const isRunningEvolution = ref(false)
+let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null
 const { toast } = useToast()
 
 function reloadApprentices() {
+  if (searchDebounceTimer) {
+    clearTimeout(searchDebounceTimer)
+    searchDebounceTimer = null
+  }
   hasLoadedRows.value = false
   loadApprenticeWorkflows()
 }
@@ -641,6 +668,13 @@ async function loadApprenticeWorkflows() {
         ? payload.data
         : []
     totalCount.value = Number(payload?.total ?? list.length ?? 0) || 0
+    const maxOffset =
+      totalCount.value > 0 ? Math.floor((totalCount.value - 1) / pageLimit.value) * pageLimit.value : 0
+    if (pageOffset.value > maxOffset) {
+      pageOffset.value = maxOffset
+      await loadApprenticeWorkflows()
+      return
+    }
     rows.value = list.map((item) => {
       const contracts = Array.isArray(item.contracts) ? item.contracts : []
       const primary = selectPrimaryContract(contracts)
@@ -663,19 +697,28 @@ async function loadApprenticeWorkflows() {
         const classNodeKey = hasEnrollment
           ? String(classInfo?.nodeKey ?? step?.classNodeKey ?? '').trim() || undefined
           : undefined
-        const stats = step?.class?.stats || {}
-        const attendanceRaw = stats.completion_percentage ?? stats.attendance_record_percentage
-        const examRaw = stats.overall_average ?? stats.overall_performance
-        const attendance = attendanceRaw !== undefined ? Number(attendanceRaw) : undefined
-        const exam = examRaw !== undefined ? Number(examRaw) : undefined
+        const stats = step?.class?.stats && typeof step.class.stats === 'object' ? step.class.stats : {}
+        const attendance = parseStatNumber(
+          (stats as any).attendance ??
+            (stats as any).averageLessonsAttendedTotal ??
+            (stats as any).averageClass ??
+            (stats as any).completion_percentage ??
+            (stats as any).attendance_record_percentage,
+        )
+        const exam = parseStatNumber(
+          (stats as any).exam ??
+            (stats as any).average ??
+            (stats as any).overall_average ??
+            (stats as any).overall_performance,
+        )
         const eligibility = step?.eligibility || {}
         const entry = {
           className,
           classNodeKey,
           hasEnrollment,
           status: step?.status ?? undefined,
-          attendance: Number.isFinite(attendance as number) ? (attendance as number) : undefined,
-          exam: Number.isFinite(exam as number) ? (exam as number) : undefined,
+          attendance,
+          exam,
           eligibleForNext: step?.eligibleForNext ?? null,
           eligibleForNextReason: Array.isArray(step?.eligibleForNextReason)
             ? step.eligibleForNextReason.map((r: any) => String(r))
@@ -741,12 +784,24 @@ onMounted(() => {
   loadApprenticeWorkflows()
 })
 
+onBeforeUnmount(() => {
+  if (searchDebounceTimer) {
+    clearTimeout(searchDebounceTimer)
+    searchDebounceTimer = null
+  }
+})
+
 watch(
   () => props.workflowId,
   () => {
+    if (searchDebounceTimer) {
+      clearTimeout(searchDebounceTimer)
+      searchDebounceTimer = null
+    }
     hasLoadedRows.value = false
     rows.value = []
     totalCount.value = 0
+    pageOffset.value = 0
     loadApprenticeWorkflows()
   },
 )
@@ -754,20 +809,18 @@ watch(
 watch(
   () => searchQuery.value,
   () => {
-    hasLoadedRows.value = false
+    if (searchDebounceTimer) clearTimeout(searchDebounceTimer)
     pageOffset.value = 0
-    loadApprenticeWorkflows()
+    searchDebounceTimer = setTimeout(() => {
+      hasLoadedRows.value = false
+      loadApprenticeWorkflows()
+      searchDebounceTimer = null
+    }, 350)
   },
 )
 
 const filteredRows = computed(() => {
-  const q = searchQuery.value.trim().toLowerCase()
-  if (!q) return rows.value
-  return rows.value.filter((r) =>
-      r.name.toLowerCase().includes(q) ||
-      r.cpf.includes(q) ||
-      r.email.toLowerCase().includes(q),
-  )
+  return rows.value
 })
 
 const isSearchActive = computed(() => searchQuery.value.trim().length > 0)
@@ -776,7 +829,7 @@ const showNoData = computed(
   () => hasLoadedRows.value && rows.value.length === 0 && !isSearchActive.value,
 )
 const showNoResults = computed(
-  () => hasLoadedRows.value && filteredRows.value.length === 0 && isSearchActive.value,
+  () => hasLoadedRows.value && rows.value.length === 0 && isSearchActive.value,
 )
 const editRequiresContract = computed(() =>
   edit.value?.conditionNodeKey ? conditionRequiresContract(edit.value.conditionNodeKey) : false,
@@ -1357,7 +1410,7 @@ async function saveEdit() {
                           class="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] font-bold text-rose-700"
                       >
                         <AlertCircle class="h-3.5 w-3.5" />
-                        {{ countIneligibleSteps(r) }} nao elegivel(is)
+                        {{ countIneligibleSteps(r) }} não elegivel(is)
                       </span>
 
                     <span class="text-xs text-slate-500 ml-1">
@@ -1415,13 +1468,13 @@ async function saveEdit() {
                                   v-else-if="!getProgress(r, c)?.isFinalStep && (getProgress(r, c)?.eligibilityReasons || []).length > 0 && isWaitingEvolution(getProgress(r, c)?.eligibilityReasons)"
                                   class="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[10px] font-semibold text-amber-700"
                               >
-                                Aguardando evolucao
+                                Aguardando evolução
                               </span>
                               <span
                                   v-else-if="!getProgress(r, c)?.isFinalStep && ((getProgress(r, c)?.eligibilityAny === false) || (getProgress(r, c)?.eligibleForNext === false) || ((getProgress(r, c)?.eligibilityReasons || []).length > 0))"
                                   class="inline-flex items-center rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[10px] font-semibold text-rose-700"
                               >
-                                Nao elegivel
+                                Não elegivel
                               </span>
                               <span
                                   v-if="getProgress(r, c)?.isFinalStep"
@@ -1481,7 +1534,7 @@ async function saveEdit() {
                                   class="text-lg font-bold"
                                   :class="(getProgress(r, c)?.attendance ?? 0) >= 85 ? 'text-emerald-600' : 'text-rose-600'"
                               >
-                                {{ getProgress(r, c)?.attendance || '-' }}
+                                {{ getProgress(r, c)?.attendance ?? '-' }}
                               </span>
                             <span class="text-xs text-slate-500">%</span>
                           </div>
@@ -1493,7 +1546,7 @@ async function saveEdit() {
                                   class="text-lg font-bold"
                                   :class="(getProgress(r, c)?.exam ?? 0) >= 7 ? 'text-emerald-600' : 'text-rose-600'"
                               >
-                                {{ getProgress(r, c)?.exam?.toFixed(1) || '-' }}
+                                {{ getProgress(r, c)?.exam !== undefined ? getProgress(r, c)?.exam?.toFixed(1) : '-' }}
                               </span>
                             <span class="text-xs text-slate-500">/10</span>
                           </div>
