@@ -664,6 +664,16 @@ function toFlagLabel(value: unknown) {
   return text
 }
 
+function isTruthyFlag(value: unknown) {
+  const text = String(value ?? '').trim().toLowerCase()
+  return value === true || value === 1 || text === '1' || text === 'true' || text === 'sim' || text === 'yes'
+}
+
+function lessonAttendanceLabel(lesson: ApiLesson) {
+  if (!isTruthyFlag(lesson?.concluded)) return '-'
+  return isTruthyFlag(lesson?.attendance) ? 'Presente' : 'Ausente'
+}
+
 function openLessons(row: RowItem, course: CourseSeqItem) {
   const progress = getProgress(row, course)
   const list = progress?.lessons || []
@@ -1900,7 +1910,7 @@ async function saveEdit() {
               <div class="mt-2 grid grid-cols-1 gap-2 text-[11px] sm:grid-cols-2">
                 <div class="rounded-lg border border-slate-200 bg-white px-2 py-1.5">
                   <span class="text-slate-500">Frequencia:</span>
-                  <span class="ml-1 font-semibold text-slate-900">{{ lesson.attendance ?? '-' }}</span>
+                  <span class="ml-1 font-semibold text-slate-900">{{ lessonAttendanceLabel(lesson) }}</span>
                 </div>
                 <div class="rounded-lg border border-slate-200 bg-white px-2 py-1.5">
                   <span class="text-slate-500">Concluida:</span>
