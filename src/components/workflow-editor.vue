@@ -1201,7 +1201,7 @@ async function saveWorkflowDraft() {
 }
 
 function isValidConnection(connection: Connection) {
-  const {sourceHandle, targetHandle, target} = connection
+  const {target, sourceHandle, targetHandle} = connection
   if (!sourceHandle || !targetHandle) return false
 
   if (sourceHandle === 'start-out') {
@@ -1232,6 +1232,48 @@ function isValidConnection(connection: Connection) {
   }
 
   return false
+}
+
+function validateConditionConnectionLimits(params: Connection) {
+  const { source, target, sourceHandle, targetHandle } = params
+  if (!source || !target || !sourceHandle || !targetHandle) {
+    return { ok: false, reason: 'Conexao invalida.' }
+  }
+
+  if (sourceHandle.startsWith('class-out') && targetHandle === 'if-in') {
+    const alreadyLinkedToCondition = edges.value.some(
+      (e) =>
+        e.source === source &&
+        e.sourceHandle === sourceHandle &&
+        e.targetHandle === 'if-in' &&
+        e.target !== target,
+    )
+    if (alreadyLinkedToCondition) {
+      return {
+        ok: false,
+        reason: 'Esta turma ja possui condicao de saida. Permitido apenas 1 vinculo de saida para condicao.',
+      }
+    }
+  }
+
+  if ((sourceHandle === 'if-ok' || sourceHandle === 'if-nok') && targetHandle.startsWith('class-in')) {
+    const oppositeHandle = sourceHandle === 'if-ok' ? 'if-nok' : 'if-ok'
+    const hasOppositeToSameClass = edges.value.some(
+      (e) =>
+        e.source === source &&
+        e.sourceHandle === oppositeHandle &&
+        e.target === target &&
+        e.targetHandle === targetHandle,
+    )
+    if (hasOppositeToSameClass) {
+      return {
+        ok: false,
+        reason: 'Nao e permitido ligar OK e NOK na mesma turma de destino.',
+      }
+    }
+  }
+
+  return { ok: true as const }
 }
 
 function edgeStyle(kind: string, executionMode?: string) {
@@ -1273,10 +1315,48 @@ function handleConnect(params: Connection) {
   if (!connectMode.value) return
 
   const {source, target, sourceHandle, targetHandle} = params
-  if (!source || !target || !sourceHandle || !targetHandle) return
+  if (!source || !target || !sourceHandle || !targetHandle) {
+    toast({
+      title: 'Conexao invalida',
+      description: 'Nao foi possivel identificar origem e destino da conexao.',
+      variant: 'destructive',
+    })
+    return
+  }
 
-  if (sourceHandle.startsWith('class-in') || sourceHandle === 'if-in') return
-  if (targetHandle.startsWith('class-out') || targetHandle === 'if-ok' || targetHandle === 'if-nok') return
+  if (sourceHandle.startsWith('class-in') || sourceHandle === 'if-in') {
+    toast({
+      title: 'Conexao nao permitida',
+      description: 'Conexao deve iniciar por uma saida do no.',
+      variant: 'destructive',
+    })
+    return
+  }
+  if (targetHandle.startsWith('class-out') || targetHandle === 'if-ok' || targetHandle === 'if-nok') {
+    toast({
+      title: 'Conexao nao permitida',
+      description: 'Conexao deve terminar em uma entrada do no.',
+      variant: 'destructive',
+    })
+    return
+  }
+  if (!isValidConnection(params)) {
+    toast({
+      title: 'Conexao nao permitida',
+      description: 'Este tipo de ligacao nao e permitido no workflow.',
+      variant: 'destructive',
+    })
+    return
+  }
+  const validated = validateConditionConnectionLimits(params)
+  if (!validated.ok) {
+    toast({
+      title: 'Conexao nao permitida',
+      description: validated.reason,
+      variant: 'destructive',
+    })
+    return
+  }
 
   const kind = edgeKindFromHandles(sourceHandle, targetHandle)
   const id = uid()
