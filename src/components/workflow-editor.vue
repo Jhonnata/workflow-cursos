@@ -93,6 +93,7 @@ const edgeTypes = {
 const apiCourses = ref<Course[]>([])
 const apiClasses = ref<CourseClass[]>([])
 const apiWorkflows = ref<any[]>([])
+const workflowSchedules = ref<Record<string, any>>({})
 const apiOnline = ref(true)
 
 function formatApiError(e: unknown) {
@@ -153,13 +154,86 @@ function formatDayOfWeek(value?: string | null) {
   return map[normalized] || raw
 }
 
+function scheduleWorkflowId(item: any) {
+  const id =
+    item?.workflowId ??
+    item?.workflow_id ??
+    item?.id ??
+    item?.workflow?.id ??
+    item?.workflow?.workflowId ??
+    item?.workflow?.workflow_id ??
+    item?.configuration?.workflowId ??
+    item?.configuration?.workflow_id
+  if (id === undefined || id === null || id === '') return ''
+  return String(id)
+}
+
+function buildWorkflowScheduleIndex(items: any[]) {
+  const next: Record<string, any> = {}
+  for (const item of items || []) {
+    const key = scheduleWorkflowId(item)
+    if (!key) continue
+    next[key] = item
+  }
+  return next
+}
+
+function workflowScheduleOf(workflow: any) {
+  if (!workflow) return null
+  return workflowSchedules.value[String(workflow.id)] ?? null
+}
+
+function formatDateTime(value: any) {
+  if (value === undefined || value === null || value === '') return '-'
+  const raw = String(value).trim()
+  if (!raw) return '-'
+  const normalized = raw.includes(' ') && !raw.includes('T') ? raw.replace(' ', 'T') : raw
+  const parsed = new Date(normalized)
+  if (Number.isNaN(parsed.getTime())) return raw
+  return new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(parsed)
+}
+
+function scheduleExecutionModeLabel(schedule: any) {
+  const mode = String(
+    schedule?.executionMode ?? schedule?.mode ?? schedule?.configuration?.executionMode ?? '',
+  ).toLowerCase()
+  if (mode === 'recurring') return 'Recorrente'
+  if (mode === 'once') return 'Unica'
+  return '-'
+}
+
+function scheduleFrequencyLabel(schedule: any) {
+  const intervalRaw = schedule?.runIntervalMinutes ?? schedule?.configuration?.runIntervalMinutes
+  const runDailyAt = schedule?.runDailyAt ?? schedule?.configuration?.runDailyAt
+  const interval = Number(intervalRaw)
+  if (Number.isFinite(interval) && interval > 0) {
+    if (interval === 60) return 'A cada 1h'
+    if (interval % 60 === 0) return `A cada ${interval / 60}h`
+    return `A cada ${interval} min`
+  }
+  if (runDailyAt) return `Diario as ${runDailyAt}`
+  return 'Sem repeticao'
+}
+
+function scheduleNextExecutionLabel(schedule: any) {
+  return formatDateTime(
+    schedule?.nextExecution ?? schedule?.scheduledAt ?? schedule?.configuration?.nextExecution,
+  )
+}
+
+function scheduleLastExecutionLabel(schedule: any) {
+  return formatDateTime(schedule?.lastExecution ?? schedule?.configuration?.lastExecution)
+}
+
 const query = ref('')
+const courseApprenticeFilter = ref<'all' | 'with' | 'without'>('all')
 const workflowSearch = ref('')
 const expandedCourses = ref<Set<number>>(new Set())
 const preselect = ref<Record<number, Set<number>>>({})
 const connectMode = ref(false)
 const selectedNodeId = ref<string | null>(null)
 const selectedEdgeId = ref<string | null>(null)
+const leftPanelCollapsed = ref(false)
 const rightPanelCollapsed = ref(false)
 const mainTab = ref<'workflow' | 'evolution'>('workflow')
 const workflowMode = ref<'list' | 'editor'>('list')
@@ -356,9 +430,22 @@ const classesByCourse = computed(() => {
 
 const courses = computed(() => {
   const q = query.value.trim().toLowerCase()
-  if (!q) return apiCourses.value
-  return apiCourses.value.filter((c) => c.name.toLowerCase().includes(q))
+  return apiCourses.value.filter((c) => {
+    const matchesQuery = !q || c.name.toLowerCase().includes(q)
+    if (!matchesQuery) return false
+    const totalApprentices = courseApprenticesTotal(c.id)
+    if (courseApprenticeFilter.value === 'with') return totalApprentices > 0
+    if (courseApprenticeFilter.value === 'without') return totalApprentices === 0
+    return true
+  })
 })
+
+function courseApprenticesTotal(courseId: number) {
+  return (classesByCourse.value[courseId] || []).reduce(
+    (acc, curr) => acc + Number(curr?.stats?.total || 0),
+    0,
+  )
+}
 
 const filteredWorkflows = computed(() => {
   const q = workflowSearch.value.trim().toLowerCase()
@@ -371,17 +458,30 @@ const filteredWorkflows = computed(() => {
   })
 })
 
+const showWorkflowTabs = computed(() => {
+  return props.workflowId !== undefined && props.workflowId !== null && props.workflowId !== ''
+})
+
+const editorGridClass = computed(() => {
+  if (leftPanelCollapsed.value && rightPanelCollapsed.value) return 'grid-cols-[56px_1fr_56px]'
+  if (leftPanelCollapsed.value) return 'grid-cols-[56px_1fr_300px]'
+  if (rightPanelCollapsed.value) return 'grid-cols-[320px_1fr_56px]'
+  return 'grid-cols-[320px_1fr_300px]'
+})
+
 onMounted(async () => {
   try {
-    const [cRes, clRes, wfRes] = await Promise.all([
+    const [cRes, clRes, wfRes, scheduleRes] = await Promise.all([
       api.getCourses(),
       api.getClasses(),
-      api.getWorkflows()
+      api.getWorkflows(),
+      api.getWorkflowSchedules(),
     ])
     apiCourses.value = cRes.data
     apiClasses.value = clRes.data
     apiWorkflows.value = wfRes.data
-    apiOnline.value = !cRes.isFallback && !clRes.isFallback && !wfRes.isFallback
+    workflowSchedules.value = buildWorkflowScheduleIndex(scheduleRes.data)
+    apiOnline.value = !cRes.isFallback && !clRes.isFallback && !wfRes.isFallback && !scheduleRes.isFallback
   } catch (e) {
     console.error('Falha ao carregar dados da API', e)
     apiOnline.value = false
@@ -537,10 +637,16 @@ function syncNodeMeta() {
             evolveAt: n.data?.payload?.evolveAt ?? '',
             startDate: n.data?.payload?.startDate ?? '',
             endDate: n.data?.payload?.endDate ?? '',
+            manualEvolution: n.data?.payload?.manualEvolution ?? false,
             useClassEndDate: evolutionMode === 'classEnd' ? true : false,
             classInsertStatus: n.data?.payload?.classInsertStatus ?? 'inProgress',
             classExitStatus: n.data?.payload?.classExitStatus ?? 'conclude',
             classCheckStatus: n.data?.payload?.classCheckStatus ?? 'inProgress',
+            checkContractDuration:
+              n.data?.payload?.checkContractDuration ?? n.data?.payload?.checkContractTime ?? false,
+            contractDurationMonths:
+              n.data?.payload?.contractDurationMonths ??
+              (n.data?.payload?.contractTime ? Number(n.data?.payload?.contractTime) : undefined),
             keepSameDayOfWeek: n.data?.payload?.keepSameDayOfWeek ?? false,
           }
         } else if (n.type === 'start') {
@@ -624,7 +730,7 @@ function selectAllCourseClasses(courseId: number) {
   setPreselectForCourse(courseId, next)
 }
 
-function addStartNode() {
+function addStartNode(position?: { x: number; y: number }) {
   const existing = nodes.value.find((n) => n.type === 'start')
   if (existing) {
     selectedNodeId.value = existing.id
@@ -640,7 +746,7 @@ function addStartNode() {
   const newNode = {
     id,
     type: 'start',
-    position: {x: 40, y: 40},
+    position: position ?? {x: 40, y: 40},
     data: {
       payload: {
         executionMode: 'once',
@@ -711,18 +817,21 @@ function addCourseNode(courseId: number, position?: { x: number; y: number }) {
   selectedEdgeId.value = null
 }
 
-function addConditionNode() {
+function addConditionNode(position?: { x: number; y: number }) {
   const id = conditionNodeId(uid())
   const payload: ConditionPayload = {
     startDate: '',
     endDate: '',
     evolveAt: '',
     evolutionMode: 'none',
+      manualEvolution: false,
       minAttendance: 100,
       minExamGrade: 0,
       mustCompleteLessons: false,
       countJustifiedAbsences: false,
       checkContract: false,
+    checkContractDuration: false,
+    contractDurationMonths: undefined,
     contractStatus: [],
     classInsertStatus: 'inProgress',
     classExitStatus: 'conclude',
@@ -735,11 +844,11 @@ function addConditionNode() {
     balanceStrategy: ['occupancy'],
   }
 
-  const position = getViewportCenterPosition({ width: 280, height: 120 })
+  const nodePosition = position ?? getViewportCenterPosition({ width: 280, height: 120 })
   const newNode = {
     id,
     type: 'condition',
-    position,
+    position: nodePosition,
     data: {
       payload,
       connectMode: connectMode.value,
@@ -861,6 +970,12 @@ function onDragStartCourse(event: DragEvent, courseId: number) {
   event.dataTransfer.effectAllowed = 'move'
 }
 
+function onDragStartPaletteNode(event: DragEvent, type: 'start' | 'condition') {
+  if (!event.dataTransfer) return
+  event.dataTransfer.setData('application/vueflow', JSON.stringify({ type }))
+  event.dataTransfer.effectAllowed = 'move'
+}
+
 function handleDrop(event: DragEvent) {
   event.preventDefault()
   const raw = event.dataTransfer?.getData('application/vueflow')
@@ -887,6 +1002,20 @@ function handleDrop(event: DragEvent) {
     const x = Math.max(0, position.x - 160)
     const y = Math.max(0, position.y - 40)
     addCourseNode(courseId, {x, y})
+    return
+  }
+
+  if (payload.type === 'start') {
+    const x = Math.max(0, position.x - 110)
+    const y = Math.max(0, position.y - 40)
+    addStartNode({ x, y })
+    return
+  }
+
+  if (payload.type === 'condition') {
+    const x = Math.max(0, position.x - 140)
+    const y = Math.max(0, position.y - 60)
+    addConditionNode({ x, y })
   }
 }
 
@@ -986,8 +1115,9 @@ async function saveEditWorkflow() {
       status: editWorkflow.value.status || 'active',
     }
     const res = await api.updateWorkflow(String(current.id), payload)
-    const wfRes = await api.getWorkflows()
+    const [wfRes, scheduleRes] = await Promise.all([api.getWorkflows(), api.getWorkflowSchedules()])
     apiWorkflows.value = wfRes.data
+    workflowSchedules.value = buildWorkflowScheduleIndex(scheduleRes.data)
     if (activeWorkflow.value && String(activeWorkflow.value.id) === String(current.id)) {
       activeWorkflow.value = {
         ...activeWorkflow.value,
@@ -1013,13 +1143,13 @@ async function saveEditWorkflow() {
   }
 }
 
-async function publishWorkflow() {
+async function persistWorkflow(status: 'active' | 'draft') {
   if (!activeWorkflow.value) return
   try {
     const payload = {
       name: activeWorkflow.value.name,
       description: activeWorkflow.value.description,
-      status: activeWorkflow.value.status,
+      status,
       nodes: nodes.value,
       edges: edges.value,
     }
@@ -1037,24 +1167,37 @@ async function publishWorkflow() {
     if (!activeWorkflow.value.id && res?.data?.id) {
       activeWorkflow.value.id = res.data.id
     }
+    activeWorkflow.value.status = status
 
-    const wfRes = await api.getWorkflows()
+    const [wfRes, scheduleRes] = await Promise.all([api.getWorkflows(), api.getWorkflowSchedules()])
     apiWorkflows.value = wfRes.data
+    workflowSchedules.value = buildWorkflowScheduleIndex(scheduleRes.data)
 
     toast({
-      title: res?.isFallback ? 'Workflow Simulado' : 'Workflow Publicado',
-      description: res?.isFallback
+      title: res?.isFallback ? 'Workflow Simulado' : status === 'draft' ? 'Rascunho salvo' : 'Workflow Publicado',
+      description:
+        res?.isFallback
           ? 'A API esta offline. O workflow foi processado localmente para demonstracao.'
-          : 'Workflow salvo com sucesso.',
+          : status === 'draft'
+            ? 'Workflow salvo como rascunho. Ele nao sera executado.'
+            : 'Workflow publicado com sucesso.',
     })
   } catch (e) {
-    console.error('Erro ao publicar', e)
+    console.error('Erro ao salvar workflow', e)
     toast({
-      title: 'Erro na publica-?o',
+      title: 'Erro ao salvar',
       description: formatApiError(e),
       variant: 'destructive',
     })
   }
+}
+
+async function publishWorkflow() {
+  await persistWorkflow('active')
+}
+
+async function saveWorkflowDraft() {
+  await persistWorkflow('draft')
 }
 
 function isValidConnection(connection: Connection) {
@@ -1227,7 +1370,7 @@ function updateSelectedStart(patch: Partial<StartPayload>) {
   <div class="flex h-full flex-col">
     <div class="border-b bg-white px-4 py-3">
       <div class="flex items-center justify-between gap-3">
-        <div class="flex items-center gap-2">
+        <div v-if="showWorkflowTabs" class="flex items-center gap-2">
           <Button size="sm" :variant="mainTab === 'workflow' ? 'secondary' : 'ghost'" @click="goToWorkflowTab">
             Workflow
           </Button>
@@ -1235,12 +1378,17 @@ function updateSelectedStart(patch: Partial<StartPayload>) {
             Evolucao dos Jovens
           </Button>
         </div>
+        <div v-else class="text-sm font-semibold text-slate-900">Workflows</div>
         <div class="flex items-center gap-2">
           <div v-if="mainTab === 'workflow' && workflowMode === 'editor' && activeWorkflow"
                class="text-xs text-slate-500">{{ activeWorkflow.name }}
           </div>
           <div v-if="mainTab === 'workflow' && workflowMode === 'editor'" class="flex items-center gap-2">
             <Button size="sm" variant="outline" @click="backToList">Voltar</Button>
+            <Button size="sm" variant="secondary" class="gap-1.5" @click="saveWorkflowDraft">
+              <Save class="h-4 w-4"/>
+              Salvar rascunho
+            </Button>
             <Button size="sm" class="bg-blue-600 hover:bg-blue-700" @click="publishWorkflow">Publicar</Button>
           </div>
         </div>
@@ -1336,6 +1484,20 @@ function updateSelectedStart(patch: Partial<StartPayload>) {
                         wf.description || 'Sem descricao'
                       }}
                     </div>
+                    <div class="mt-1 grid gap-0.5 text-[10px] text-slate-600">
+                      <div class="flex items-center gap-1">
+                        <span class="font-semibold">Modo:</span>
+                        <span>{{ scheduleExecutionModeLabel(workflowScheduleOf(wf)) }}</span>
+                      </div>
+                      <div class="flex items-center gap-1">
+                        <span class="font-semibold">Proxima:</span>
+                        <span>{{ scheduleNextExecutionLabel(workflowScheduleOf(wf)) }}</span>
+                      </div>
+                      <div class="flex items-center gap-1">
+                        <span class="font-semibold">Frequencia:</span>
+                        <span>{{ scheduleFrequencyLabel(workflowScheduleOf(wf)) }}</span>
+                      </div>
+                    </div>
                     <div class="text-[10px] text-muted-foreground flex items-center gap-2">
                       <span>ID: {{ wf.id }}</span>
                       <span>-</span>
@@ -1422,9 +1584,10 @@ function updateSelectedStart(patch: Partial<StartPayload>) {
         <div
             v-else
             class="grid h-full min-h-0 gap-0 border rounded-2xl overflow-hidden"
-            :class="rightPanelCollapsed ? 'grid-cols-[320px_1fr_56px]' : 'grid-cols-[320px_1fr_300px]'"
+            :class="editorGridClass"
         >
           <div class="h-full bg-muted/30 border-r min-h-0 overflow-hidden">
+            <template v-if="!leftPanelCollapsed">
 
             <ScrollArea class="h-full w-full">
               <div class="p-4">
@@ -1441,17 +1604,50 @@ function updateSelectedStart(patch: Partial<StartPayload>) {
                     >
                     vueflow
                   </span>
+                    <Button
+                        size="icon"
+                        variant="ghost"
+                        class="h-7 w-7"
+                        title="Recolher painel de cursos"
+                        @click="leftPanelCollapsed = true"
+                    >
+                      <ChevronRight class="h-4 w-4 rotate-180"/>
+                    </Button>
                   </div>
                 </div>
 
                 <div class="space-y-2">
                   <Input v-model="query" placeholder="Buscar..."/>
+                  <select
+                      v-model="courseApprenticeFilter"
+                      class="h-9 w-full rounded-md border border-slate-200 bg-white px-2 text-xs"
+                  >
+                    <option value="all">Todos os cursos</option>
+                    <option value="with">Com aprendizes</option>
+                    <option value="without">Sem aprendizes</option>
+                  </select>
                   <div class="flex gap-2">
-                    <Button size="sm" variant="secondary" class="flex-1" @click="addStartNode">
+                    <Button
+                        size="sm"
+                        variant="secondary"
+                        class="flex-1 cursor-grab active:cursor-grabbing"
+                        title="Inicio (clique ou arraste)"
+                        draggable="true"
+                        @click="addStartNode"
+                        @dragstart="(event) => onDragStartPaletteNode(event, 'start')"
+                    >
                       <Play class="mr-2 h-4 w-4"/>
                       Inicio
                     </Button>
-                    <Button size="sm" variant="secondary" class="flex-1" @click="addConditionNode">
+                    <Button
+                        size="sm"
+                        variant="secondary"
+                        class="flex-1 cursor-grab active:cursor-grabbing"
+                        title="Condicao (clique ou arraste)"
+                        draggable="true"
+                        @click="addConditionNode"
+                        @dragstart="(event) => onDragStartPaletteNode(event, 'condition')"
+                    >
                       <Plus class="mr-2 h-4 w-4"/>
                       Condicao
                     </Button>
@@ -1499,6 +1695,12 @@ function updateSelectedStart(patch: Partial<StartPayload>) {
 
                 <div class="space-y-2">
                   <div
+                      v-if="courses.length === 0"
+                      class="rounded-xl border border-dashed bg-slate-50 p-3 text-center text-xs text-muted-foreground"
+                  >
+                    Nenhum curso encontrado para o filtro selecionado.
+                  </div>
+                  <div
                       v-for="c in courses"
                       :key="c.id"
                       class="rounded-2xl border bg-background shadow-sm overflow-hidden"
@@ -1527,7 +1729,7 @@ function updateSelectedStart(patch: Partial<StartPayload>) {
                         </div>
                         <div class="flex items-baseline gap-2"><span
                             class="text-1xl font-bold text-slate-600">{{
-                            (classesByCourse[c.id] || []).reduce((acc, curr) => acc + (curr.stats?.total || 0), 0)
+                            courseApprenticesTotal(c.id)
                           }}</span><span class="text-sm text-slate-500">Aprendizes</span>
                         </div>
                       </div>
@@ -1659,6 +1861,44 @@ function updateSelectedStart(patch: Partial<StartPayload>) {
                 </div>
               </div>
             </ScrollArea>
+            </template>
+            <div v-else class="flex h-full flex-col items-center gap-3 pt-3">
+              <Button
+                  size="icon"
+                  variant="ghost"
+                  class="h-8 w-8"
+                  title="Expandir painel de cursos"
+                  @click="leftPanelCollapsed = false"
+              >
+                <ChevronRight class="h-4 w-4"/>
+              </Button>
+              <div class="h-px w-8 bg-border"></div>
+              <Button
+                  size="icon"
+                  variant="secondary"
+                  class="h-9 w-9 cursor-grab active:cursor-grabbing"
+                  title="Inicio (clique ou arraste)"
+                  draggable="true"
+                  @click="addStartNode()"
+                  @dragstart="(event) => onDragStartPaletteNode(event, 'start')"
+              >
+                <Play class="h-4 w-4"/>
+              </Button>
+              <Button
+                  size="icon"
+                  variant="secondary"
+                  class="h-9 w-9 cursor-grab active:cursor-grabbing"
+                  title="Condicao (clique ou arraste)"
+                  draggable="true"
+                  @click="addConditionNode()"
+                  @dragstart="(event) => onDragStartPaletteNode(event, 'condition')"
+              >
+                <Plus class="h-4 w-4"/>
+              </Button>
+              <div class="mt-2 text-[10px] text-muted-foreground [writing-mode:vertical-rl] rotate-180">
+                arraste
+              </div>
+            </div>
           </div>
 
 
@@ -1726,6 +1966,20 @@ function updateSelectedStart(patch: Partial<StartPayload>) {
                   <div>
                     <div class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Workflow</div>
                     <div class="text-sm font-bold text-slate-900">{{ activeWorkflow.name }}</div>
+                    <div class="mt-1 grid gap-0.5 text-[10px] text-slate-600">
+                      <div class="flex items-center gap-1">
+                        <span class="font-semibold">Proxima execucao:</span>
+                        <span>{{ scheduleNextExecutionLabel(workflowScheduleOf(activeWorkflow)) }}</span>
+                      </div>
+                      <div class="flex items-center gap-1">
+                        <span class="font-semibold">Ultima execucao:</span>
+                        <span>{{ scheduleLastExecutionLabel(workflowScheduleOf(activeWorkflow)) }}</span>
+                      </div>
+                      <div class="flex items-center gap-1">
+                        <span class="font-semibold">Frequencia:</span>
+                        <span>{{ scheduleFrequencyLabel(workflowScheduleOf(activeWorkflow)) }}</span>
+                      </div>
+                    </div>
                   </div>
                   <span
                       class="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold"

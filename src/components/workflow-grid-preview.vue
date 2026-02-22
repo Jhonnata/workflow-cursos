@@ -13,6 +13,7 @@ import {
   AlertCircle,
   Clock,
   Pencil,
+  BookOpen,
   ChevronLeft,
   RefreshCw,
 } from 'lucide-vue-next'
@@ -44,6 +45,7 @@ type EditState = {
 }
 
 type ProgressItem = {
+  classId?: number
   className?: string
   classNodeKey?: string
   hasEnrollment?: boolean
@@ -58,6 +60,7 @@ type ProgressItem = {
   eligibilityReasons?: string[]
   eligibilityByCondition?: { nodeKey: string; eligible: boolean; reasons: string[] }[]
   isFinalStep?: boolean
+  lessons?: ApiLesson[]
 }
 
 type RowContract = {
@@ -80,6 +83,7 @@ type ApiStep = {
   nodeKey?: string
   order?: number
   courseId?: number
+  classId?: number
   courseName?: string
   className?: string
   classNodeKey?: string
@@ -99,6 +103,15 @@ type ApiStep = {
     reasons?: string[]
     byCondition?: { nodeKey?: string; eligible?: boolean; reasons?: string[] }[]
   }
+  lessons?: ApiLesson[]
+}
+
+type ApiLesson = {
+  lesson?: string | number
+  activated?: string | number | boolean | null
+  name?: string
+  attendance?: number | string | null
+  concluded?: string | number | boolean | null
 }
 
 type ApiApprentice = {
@@ -438,6 +451,51 @@ function parseHandleClassId(handle?: string | null) {
   return Number.isFinite(id) ? id : null
 }
 
+function resolveClassIdByCourseAndName(courseNodeId: string, className?: string) {
+  const name = String(className || '').trim()
+  if (!name) return null
+  const courseNode = (props.nodes || []).find((n) => n.id === courseNodeId && n.type === 'course')
+  const classes = (courseNode?.data as any)?.payload?.classes || []
+  const found = classes.find((cls: any) => String(cls?.name || '').trim() === name)
+  const id = Number(found?.id)
+  return Number.isFinite(id) ? id : null
+}
+
+function conditionKeyForEvolution(course: CourseSeqItem, progress?: ProgressItem) {
+  const options = conditionOptionsForCourse(course)
+  if (options.length === 0) return null
+  const fromClass = Number(progress?.classId)
+  const progressConditionKey = String(progress?.classNodeKey || '').trim()
+  if (progressConditionKey) {
+    const exists = options.some((opt) => opt.nodeKey === progressConditionKey)
+    if (exists) return progressConditionKey
+  }
+  if (Number.isFinite(fromClass)) {
+    const byFromClass = options.find((opt) =>
+      (props.edges || []).some(
+        (edge) =>
+          edge.source === course.nodeId &&
+          edge.target === opt.nodeKey &&
+          edge.targetHandle === 'if-in' &&
+          parseHandleClassId(edge.sourceHandle) === fromClass,
+      ),
+    )
+    if (byFromClass) return byFromClass.nodeKey
+  }
+  return defaultConditionKey(options)
+}
+
+function inferToClassFromCondition(conditionNodeKey: string) {
+  const candidates = new Set<number>()
+  for (const edge of props.edges || []) {
+    if (edge.source !== conditionNodeKey || edge.sourceHandle !== 'if-ok') continue
+    const classId = parseHandleClassId(edge.targetHandle)
+    if (classId !== null) candidates.add(classId)
+  }
+  const list = Array.from(candidates).sort((a, b) => a - b)
+  return list.length > 0 ? list[0] : null
+}
+
 function resolveClassById(classId: number) {
   for (const node of props.nodes || []) {
     if (node.type !== 'course') continue
@@ -467,6 +525,84 @@ function conditionRequiresContract(conditionId: string) {
   return false
 }
 
+function evolutionStepKey(rowId: number, courseNodeId: string) {
+  return `${rowId}:${courseNodeId}`
+}
+
+function canManualEvolute(row: RowItem, course: CourseSeqItem) {
+  const progress = getProgress(row, course)
+  if (!progress || progress.isFinalStep) return false
+  const classIdRaw = Number(progress.classId)
+  const fromClass = Number.isFinite(classIdRaw)
+    ? classIdRaw
+    : resolveClassIdByCourseAndName(course.nodeId, progress.className)
+  if (!Number.isFinite(fromClass)) return false
+  const conditionNodeKey = conditionKeyForEvolution(course, progress)
+  if (!conditionNodeKey) return false
+  const toClass = inferToClassFromCondition(conditionNodeKey)
+  return Number.isFinite(toClass)
+}
+
+async function evoluteStep(row: RowItem, course: CourseSeqItem) {
+  if (!props.workflowId) return
+  const progress = getProgress(row, course)
+  if (!progress) return
+  const classIdRaw = Number(progress.classId)
+  const fromClass = Number.isFinite(classIdRaw)
+    ? classIdRaw
+    : resolveClassIdByCourseAndName(course.nodeId, progress.className)
+  if (!Number.isFinite(fromClass)) {
+    toast({
+      title: 'Nao foi possivel evoluir',
+      description: 'Nao foi possivel identificar a turma de origem (fromClass).',
+      variant: 'destructive',
+    })
+    return
+  }
+  const conditionNodeKey = conditionKeyForEvolution(course, progress)
+  if (!conditionNodeKey) {
+    toast({
+      title: 'Nao foi possivel evoluir',
+      description: 'Nao foi possivel identificar a condicao da etapa.',
+      variant: 'destructive',
+    })
+    return
+  }
+  const toClass = inferToClassFromCondition(conditionNodeKey)
+  if (!Number.isFinite(toClass)) {
+    toast({
+      title: 'Nao foi possivel evoluir',
+      description: 'Nao foi possivel identificar a turma de destino (toClass) na saida OK.',
+      variant: 'destructive',
+    })
+    return
+  }
+
+  const key = evolutionStepKey(row.id, course.nodeId)
+  if (evolvingStepKey.value === key) return
+  evolvingStepKey.value = key
+  try {
+    await api.evoluteApprentice(props.workflowId, row.id, {
+      fromClass: Number(fromClass),
+      toClass: Number(toClass),
+    })
+    toast({
+      title: 'Etapa evoluida',
+      description: `Evolucao manual enviada (fromClass ${fromClass} -> toClass ${toClass}).`,
+    })
+    await loadApprenticeWorkflows()
+  } catch (e) {
+    console.error('Erro ao evoluir etapa manualmente', e)
+    toast({
+      title: 'Erro ao evoluir etapa',
+      description: formatApiError(e),
+      variant: 'destructive',
+    })
+  } finally {
+    evolvingStepKey.value = ''
+  }
+}
+
 const courseSeq = computed(() => deriveCourseSequence(props.nodes, props.edges))
 const classMetaByName = computed(() => {
   const map = new Map<string, { dayOfWeek?: string | null; onlyWithContract?: unknown }>()
@@ -493,8 +629,55 @@ const totalCount = ref(0)
 const pageLimit = ref(10)
 const pageOffset = ref(0)
 const isRunningEvolution = ref(false)
+const evolvingStepKey = ref('')
+const lessonsModal = ref<{
+  open: boolean
+  apprenticeName: string
+  courseName: string
+  lessons: ApiLesson[]
+}>({
+  open: false,
+  apprenticeName: '',
+  courseName: '',
+  lessons: [],
+})
 let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null
 const { toast } = useToast()
+
+function normalizeLessonList(lessons: unknown) {
+  if (!Array.isArray(lessons)) return []
+  return lessons.map((item) => ({
+    lesson: (item as any)?.lesson,
+    activated: (item as any)?.activated,
+    name: String((item as any)?.name || ''),
+    attendance: (item as any)?.attendance ?? null,
+    concluded: (item as any)?.concluded ?? null,
+  }))
+}
+
+function toFlagLabel(value: unknown) {
+  if (value === true || value === 1) return 'Sim'
+  if (value === false || value === 0) return 'Nao'
+  const text = String(value ?? '').trim().toLowerCase()
+  if (text === '1' || text === 'true' || text === 'sim' || text === 'yes') return 'Sim'
+  if (!text || text === '0' || text === 'false' || text === 'nao' || text === 'no') return 'Nao'
+  return text
+}
+
+function openLessons(row: RowItem, course: CourseSeqItem) {
+  const progress = getProgress(row, course)
+  const list = progress?.lessons || []
+  lessonsModal.value = {
+    open: true,
+    apprenticeName: row.name,
+    courseName: course.courseName,
+    lessons: list,
+  }
+}
+
+function closeLessonsModal() {
+  lessonsModal.value.open = false
+}
 
 function reloadApprentices() {
   if (searchDebounceTimer) {
@@ -694,6 +877,12 @@ async function loadApprenticeWorkflows() {
           ? String(classInfo?.name ?? step?.className ?? '').trim() || undefined
           : undefined*/
         const className = String(classInfo?.name ?? step?.className ?? '').trim()
+        const classId =
+          hasEnrollment && classInfo?.id !== undefined && classInfo?.id !== null
+            ? Number(classInfo.id)
+            : step?.classId !== undefined && step?.classId !== null
+              ? Number(step.classId)
+              : undefined
         const classNodeKey = hasEnrollment
           ? String(classInfo?.nodeKey ?? step?.classNodeKey ?? '').trim() || undefined
           : undefined
@@ -712,7 +901,9 @@ async function loadApprenticeWorkflows() {
             (stats as any).overall_performance,
         )
         const eligibility = step?.eligibility || {}
+        const lessons = normalizeLessonList(step?.lessons)
         const entry = {
+          classId: Number.isFinite(Number(classId)) ? Number(classId) : undefined,
           className,
           classNodeKey,
           hasEnrollment,
@@ -741,6 +932,7 @@ async function loadApprenticeWorkflows() {
               : Array.isArray(eligibility?.reasons)
                 ? eligibility.reasons.some((r: any) => String(r) === 'finalStep')
                 : false,
+          lessons,
         }
         progress[key] = entry
         const normalized = normalizeKey(key)
@@ -944,6 +1136,7 @@ function applyResolvedConditionToEdit(payload: Record<string, any>) {
     endDate: cleanDate(payload.endDate),
     evolveAt: cleanDate(payload.evolveAt),
     evolutionMode: (payload.evolutionMode as any) || current.evolutionMode || 'none',
+    manualEvolution: !!(payload.manualEvolution ?? current.manualEvolution),
     minAttendance: Number(payload.minAttendance ?? current.minAttendance ?? 100),
     minExamGrade: Number(payload.minExamGrade ?? current.minExamGrade ?? 0),
     mustCompleteLessons: !!(payload.mustCompleteLessons ?? current.mustCompleteLessons),
@@ -951,6 +1144,15 @@ function applyResolvedConditionToEdit(payload: Record<string, any>) {
       payload.countJustifiedAbsences ?? current.countJustifiedAbsences
     ),
     checkContract: !!(payload.checkContract ?? current.checkContract),
+    checkContractDuration: !!(
+      payload.checkContractDuration ?? payload.checkContractTime ?? current.checkContractDuration ?? current.checkContractTime
+    ),
+    contractDurationMonths:
+      payload.contractDurationMonths !== undefined && payload.contractDurationMonths !== null
+        ? Number(payload.contractDurationMonths)
+        : payload.contractTime !== undefined && payload.contractTime !== null && String(payload.contractTime).trim() !== ''
+          ? Number(payload.contractTime)
+          : current.contractDurationMonths,
     contractStatus: Array.isArray(payload.contractStatus) ? payload.contractStatus : (current.contractStatus || []),
     classInsertStatus: String(payload.classInsertStatus ?? current.classInsertStatus ?? 'inProgress'),
     classExitStatus: String(payload.classExitStatus ?? current.classExitStatus ?? 'conclude'),
@@ -1030,6 +1232,7 @@ async function openEdit(row: RowItem, course: CourseSeqItem) {
     endDate: p?.evolveAt || '',
     evolveAt: p?.condition?.evolveAt || p?.evolveAt || '',
     evolutionMode: 'none',
+    manualEvolution: false,
     minAttendance: 100,
     minExamGrade: 0,
     hasAttendance: false,
@@ -1037,6 +1240,8 @@ async function openEdit(row: RowItem, course: CourseSeqItem) {
     mustCompleteLessons: true,
     countJustifiedAbsences: false,
     checkContract: requiresContract,
+    checkContractDuration: false,
+    contractDurationMonths: undefined,
     contractStatus: ['EA'],
     classInsertStatus: 'inProgress',
     classExitStatus: 'conclude',
@@ -1140,11 +1345,17 @@ async function saveEdit() {
     endDate: edit.value.value.endDate,
     evolveAt: edit.value.value.evolveAt,
     evolutionMode: edit.value.value.evolutionMode,
+    manualEvolution: !!edit.value.value.manualEvolution,
     minAttendance: edit.value.value.minAttendance,
     minExamGrade: edit.value.value.minExamGrade,
     mustCompleteLessons: edit.value.value.mustCompleteLessons,
     countJustifiedAbsences: !!edit.value.value.countJustifiedAbsences,
     checkContract: edit.value.value.checkContract,
+    checkContractDuration: !!edit.value.value.checkContractDuration,
+    contractDurationMonths:
+      edit.value.value.contractDurationMonths !== undefined && edit.value.value.contractDurationMonths !== null
+        ? Number(edit.value.value.contractDurationMonths)
+        : undefined,
     contractStatus: edit.value.value.contractStatus || [],
     classInsertStatus: edit.value.value.classInsertStatus,
     classExitStatus: edit.value.value.classExitStatus,
@@ -1498,16 +1709,42 @@ async function saveEdit() {
                             </div>
 
                             </div>
-                        <Button
-                            v-if="!getProgress(r, c)?.isFinalStep"
-                            size="icon"
-                            variant="ghost"
-                            class="h-8 w-8 shrink-0"
-                            title="Editar condições"
-                              @click.stop="openEdit(r, c)"
-                        >
-                          <Pencil class="h-4 w-4" />
+                        <div class="flex items-center gap-1.5 shrink-0">
+                          <Button
+                              size="icon"
+                              variant="ghost"
+                              class="h-8 w-8"
+                              :title="(getProgress(r, c)?.lessons || []).length > 0 ? 'Ver lessons' : 'Sem lessons'"
+                              :disabled="(getProgress(r, c)?.lessons || []).length === 0"
+                              @click.stop="openLessons(r, c)"
+                          >
+                            <BookOpen class="h-4 w-4" />
                           </Button>
+                          <Button
+                              v-if="!getProgress(r, c)?.isFinalStep"
+                              size="icon"
+                              variant="ghost"
+                              class="h-8 w-8"
+                              :disabled="!canManualEvolute(r, c) || evolvingStepKey === evolutionStepKey(r.id, c.nodeId)"
+                              title="Evoluir etapa"
+                              @click.stop="evoluteStep(r, c)"
+                          >
+                            <RefreshCw
+                                class="h-4 w-4"
+                                :class="evolvingStepKey === evolutionStepKey(r.id, c.nodeId) ? 'animate-spin' : ''"
+                            />
+                          </Button>
+                          <Button
+                              v-if="!getProgress(r, c)?.isFinalStep"
+                              size="icon"
+                              variant="ghost"
+                              class="h-8 w-8"
+                              title="Editar condicoes"
+                              @click.stop="openEdit(r, c)"
+                          >
+                            <Pencil class="h-4 w-4" />
+                          </Button>
+                        </div>
                         </div>
 
                         <div
@@ -1616,6 +1853,62 @@ async function saveEdit() {
           <Users class="h-12 w-12 mx-auto mb-3 text-slate-400" />
           <div class="text-sm font-semibold text-slate-900 mb-1">Nenhum aprendiz encontrado</div>
           <div class="text-xs text-slate-500">Tente ajustar sua busca</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Lessons Modal -->
+    <div v-if="lessonsModal.open" class="absolute inset-0 z-20">
+      <div class="absolute inset-0 bg-black/30 backdrop-blur-sm" @click="closeLessonsModal" />
+      <div class="absolute left-1/2 top-1/2 w-[min(760px,92vw)] -translate-x-1/2 -translate-y-1/2 rounded-2xl border bg-white shadow-2xl">
+        <div class="flex items-center justify-between border-b px-4 py-3">
+          <div>
+            <div class="text-sm font-bold text-slate-900">Lessons da etapa</div>
+            <div class="text-xs text-slate-600">{{ lessonsModal.apprenticeName }} • {{ lessonsModal.courseName }}</div>
+          </div>
+          <Button size="icon" variant="ghost" class="h-8 w-8" @click="closeLessonsModal">
+            <X class="h-4 w-4" />
+          </Button>
+        </div>
+        <div class="max-h-[65vh] overflow-auto p-4">
+          <div
+              v-if="lessonsModal.lessons.length === 0"
+              class="rounded-xl border border-dashed bg-slate-50 p-6 text-center text-xs text-slate-500"
+          >
+            Nenhuma lesson encontrada para esta etapa.
+          </div>
+          <div v-else class="space-y-2">
+            <div
+                v-for="(lesson, idx) in lessonsModal.lessons"
+                :key="`${String(lesson.lesson || idx)}-${idx}`"
+                class="rounded-xl border border-slate-200 bg-slate-50/40 p-3"
+            >
+              <div class="flex items-center justify-between gap-3">
+                <div class="min-w-0">
+                  <div class="text-sm font-semibold text-slate-900 truncate">
+                    {{ lesson.name || `Lesson ${idx + 1}` }}
+                  </div>
+                  <div class="text-[11px] text-slate-500">ID: {{ lesson.lesson ?? '-' }}</div>
+                </div>
+                <span
+                    class="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold"
+                    :class="toFlagLabel(lesson.activated) === 'Sim' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-white text-slate-600'"
+                >
+                  {{ toFlagLabel(lesson.activated) === 'Sim' ? 'Ativa' : 'Inativa' }}
+                </span>
+              </div>
+              <div class="mt-2 grid grid-cols-1 gap-2 text-[11px] sm:grid-cols-2">
+                <div class="rounded-lg border border-slate-200 bg-white px-2 py-1.5">
+                  <span class="text-slate-500">Frequencia:</span>
+                  <span class="ml-1 font-semibold text-slate-900">{{ lesson.attendance ?? '-' }}</span>
+                </div>
+                <div class="rounded-lg border border-slate-200 bg-white px-2 py-1.5">
+                  <span class="text-slate-500">Concluida:</span>
+                  <span class="ml-1 font-semibold text-slate-900">{{ toFlagLabel(lesson.concluded) }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>

@@ -1,18 +1,27 @@
 import { mockCatalog } from './workflow'
 import { API_BASE_URL } from './config'
-import { getStoredAuth } from './auth'
+import { getValidStoredAuthOrLogout, logoutForExpiredSession } from './auth'
 
 const BASE_URL = API_BASE_URL
 
 async function tryFetch(url: string, options?: RequestInit, fallbackData?: any) {
   try {
     const headers = new Headers(options?.headers || {})
-    const auth = getStoredAuth()
+    const auth = getValidStoredAuthOrLogout()
+    if (!auth && headers.has('Authorization')) {
+      headers.delete('Authorization')
+    }
     if (auth && !headers.has('Authorization')) {
       headers.set('Authorization', `${auth.type} ${auth.token}`)
     }
     const res = await fetch(url, { ...options, headers })
     if (!res.ok) {
+      if (res.status === 401) {
+        logoutForExpiredSession()
+        const unauthorized = new Error('Sessao expirada. Realize login novamente.')
+        ;(unauthorized as any).status = 401
+        throw unauthorized
+      }
       const contentType = res.headers.get('content-type') || ''
       let payload: any = null
       if (contentType.includes('application/json')) {
@@ -33,6 +42,7 @@ async function tryFetch(url: string, options?: RequestInit, fallbackData?: any) 
     return { data, isFallback: false }
   } catch (e) {
     console.warn(`Fetch failed for ${url}, using fallback if available.`, e)
+    if ((e as any)?.status === 401) throw e
     if (fallbackData !== undefined) return { data: fallbackData, isFallback: true }
     throw e
   }
@@ -74,14 +84,12 @@ export const api = {
   },
   async getWorkflows() {
     const res = await tryFetch(`${BASE_URL}/workflows`, {}, [])
-    const data = res.data
-    const normalized = Array.isArray(data)
-      ? data
-      : Array.isArray(data?.workflows)
-        ? data.workflows
-        : Array.isArray(data?.data?.workflows)
-          ? data.data.workflows
-          : []
+    const normalized = normalizeArrayPayload(res.data, ['workflows'])
+    return { ...res, data: normalized }
+  },
+  async getWorkflowSchedules() {
+    const res = await tryFetch(`${BASE_URL}/workflows/schedule`, {}, [])
+    const normalized = normalizeArrayPayload(res.data, ['schedules', 'workflows'])
     return { ...res, data: normalized }
   },
   async saveWorkflow(data: any) {
@@ -191,6 +199,19 @@ export const api = {
     const ap = encodeURIComponent(String(apprenticeId))
     return tryFetch(`${BASE_URL}/workflows/${wfId}/conditions/${nk}/apprentice/${ap}`)
   },
+  async evoluteApprentice(
+    workflowId: string | number,
+    apprenticeId: string | number,
+    data: { fromClass: number; toClass: number },
+  ) {
+    const wfId = encodeURIComponent(String(workflowId))
+    const apId = encodeURIComponent(String(apprenticeId))
+    return tryFetch(`${BASE_URL}/workflows/${wfId}/apprentices/${apId}/evolute`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+  },
   async updateApprenticeWorkflow(id: number, data: any) {
     return tryFetch(`${BASE_URL}/apprentice_workflow/${id}`, {
       method: 'PATCH',
@@ -205,4 +226,14 @@ export const api = {
       body: JSON.stringify(items),
     }, items)
   },
+}
+
+function normalizeArrayPayload(data: any, arrayKeys: string[] = []) {
+  if (Array.isArray(data)) return data
+  for (const key of arrayKeys) {
+    if (Array.isArray(data?.[key])) return data[key]
+    if (Array.isArray(data?.data?.[key])) return data.data[key]
+  }
+  if (Array.isArray(data?.data)) return data.data
+  return []
 }

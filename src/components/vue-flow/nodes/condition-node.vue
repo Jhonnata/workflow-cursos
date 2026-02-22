@@ -82,8 +82,22 @@ const HEADER_H = 56
               : 'Nao definido'
           }}
         </div>
+        <div
+          v-if="data.payload.checkContract && (data.payload.checkContractDuration || data.payload.checkContractTime)"
+          class="mb-1"
+        >
+          Tempo de contrato:
+          {{
+            data.payload.contractDurationMonths !== undefined && data.payload.contractDurationMonths !== null
+              ? `${data.payload.contractDurationMonths} meses`
+              : data.payload.contractTime || 'Nao definido'
+          }}
+        </div>
         <div v-if="data.payload.keepSameDayOfWeek" class="mb-1">
           Manter dia da semana
+        </div>
+        <div v-if="data.payload.manualEvolution" class="mb-1">
+          Evolucao manual habilitada
         </div>
         <div v-if="(data.payload.evolutionMode === 'specific' || (!data.payload.evolutionMode && data.payload.evolveAt)) && data.payload.evolveAt" class="mb-1">
           Evoluir em: {{ data.payload.evolveAt }}
@@ -109,7 +123,7 @@ const HEADER_H = 56
         <div v-if="data.payload.classInsertStatus" class="mb-1">
           Status na turma destino: {{ classInsertStatusLabel(data.payload.classInsertStatus) }}
         </div>
-        <div v-if="!data.payload.hasAttendance && !data.payload.hasMinGrade && !data.payload.checkContract && !data.payload.classInsertStatus && !data.payload.classExitStatus && !data.payload.classCheckStatus && !data.payload.keepSameDayOfWeek && (data.payload.evolutionMode === 'none' || !data.payload.evolutionMode) && !data.payload.useClassEndDate && !data.payload.evolveAt && !data.payload.startDate && !data.payload.endDate && !data.payload.isBalanced">
+        <div v-if="!data.payload.hasAttendance && !data.payload.hasMinGrade && !data.payload.checkContract && !data.payload.classInsertStatus && !data.payload.classExitStatus && !data.payload.classCheckStatus && !data.payload.keepSameDayOfWeek && !data.payload.manualEvolution && (data.payload.evolutionMode === 'none' || !data.payload.evolutionMode) && !data.payload.useClassEndDate && !data.payload.evolveAt && !data.payload.startDate && !data.payload.endDate && !data.payload.isBalanced">
           Nenhuma condição configurada.
         </div>
         <div v-if="data.payload.isBalanced" class="mt-2 flex flex-col gap-1 text-blue-600 font-medium bg-blue-50/50 p-1.5 rounded-lg border border-blue-100">

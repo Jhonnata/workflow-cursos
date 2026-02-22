@@ -25,11 +25,16 @@ export type ConditionPayload = {
   endDate: string
   evolveAt?: string
   evolutionMode?: 'none' | 'specific' | 'range' | 'classEnd'
+  manualEvolution?: boolean
   minAttendance: number
   minExamGrade: number
   mustCompleteLessons: boolean
   countJustifiedAbsences: boolean
   checkContract: boolean
+  checkContractDuration?: boolean
+  contractDurationMonths?: number
+  checkContractTime?: boolean
+  contractTime?: string
   contractStatus: string[]
   classInsertStatus: string
   classExitStatus: string

@@ -38,6 +38,10 @@ function sanitizeOneToHundred(value: unknown) {
   return { n, text: String(n) }
 }
 
+function sanitizeDigits(value: unknown) {
+  return String(value ?? '').replace(/\D+/g, '')
+}
+
 function updateCondition(patch: Partial<ConditionPayload>) {
   emit('update', patch)
 }
@@ -238,6 +242,51 @@ const contractActive = computed(() => (props.requiresContract ? true : !!props.v
             }}</Label>
           </div>
         </div>
+        <div class="mt-2 rounded-lg border p-2">
+          <div class="flex items-center gap-2">
+            <Switch
+                :id="`${idPrefix}-contract-time-check`"
+                :checked="!!value.checkContractDuration"
+                @update:checked="(val) => updateCondition({ checkContractDuration: val })"
+            />
+            <Label :for="`${idPrefix}-contract-time-check`" class="text-[11px]">
+              Checar tempo do contrato
+            </Label>
+          </div>
+          <div v-if="value.checkContractDuration" class="space-y-1 pt-2">
+            <Label :for="`${idPrefix}-contract-time`" class="text-[11px]">Tempo do contrato</Label>
+            <Input
+                :id="`${idPrefix}-contract-time`"
+                type="text"
+                inputmode="numeric"
+                pattern="[0-9]*"
+                placeholder="Ex: 12"
+                :model-value="value.contractDurationMonths ?? ''"
+                @input="(e) => {
+                  const target = e.target as HTMLInputElement
+                  const text = sanitizeDigits(target?.value)
+                  if (target) target.value = text
+                  updateCondition({ contractDurationMonths: text ? Number(text) : undefined })
+                }"
+            />
+            <div class="text-[10px] text-muted-foreground">Tempo em meses.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Evolucao Manual -->
+    <div class="space-y-2 rounded-xl border p-3">
+      <div class="flex items-center justify-between">
+        <div>
+          <div class="text-xs font-semibold">Evolucao manual</div>
+          <div class="text-[11px] text-muted-foreground">Permite evoluir a condicao manualmente</div>
+        </div>
+        <Switch
+            :id="`${idPrefix}-manual-evolution`"
+            :checked="!!value.manualEvolution"
+            @update:checked="(val) => updateCondition({ manualEvolution: val })"
+        />
       </div>
     </div>
 
