@@ -668,6 +668,18 @@ function syncNodeMeta() {
             payload,
             onRemove: removeNode,
             nodeId: n.id,
+            ...(n.type === 'course'
+                ? {
+                  onCreateConditionForClass: createConditionFromClass,
+                  onEnableConnectMode: () => {
+                    connectMode.value = true
+                    toast({
+                      title: 'Modo conectar ativado',
+                      description: 'Arraste a saida da turma para uma condicao existente.',
+                    })
+                  },
+                }
+                : {}),
             ...(n.type === 'condition'
                 ? {
                   showDetails: conditionDetailsOpenId.value === n.id,
@@ -793,6 +805,14 @@ function addCourseNode(courseId: number, position?: { x: number; y: number }) {
                     payload: {...n.data?.payload, ...payload, classes: merged},
                     connectMode: connectMode.value,
                     onRemove: removeNode,
+                    onCreateConditionForClass: createConditionFromClass,
+                    onEnableConnectMode: () => {
+                      connectMode.value = true
+                      toast({
+                        title: 'Modo conectar ativado',
+                        description: 'Arraste a saida da turma para uma condicao existente.',
+                      })
+                    },
                     nodeId: id,
                   },
                 },
@@ -807,6 +827,14 @@ function addCourseNode(courseId: number, position?: { x: number; y: number }) {
         payload,
         connectMode: connectMode.value,
         onRemove: removeNode,
+        onCreateConditionForClass: createConditionFromClass,
+        onEnableConnectMode: () => {
+          connectMode.value = true
+          toast({
+            title: 'Modo conectar ativado',
+            description: 'Arraste a saida da turma para uma condicao existente.',
+          })
+        },
         nodeId: id,
       },
     }
@@ -863,6 +891,68 @@ function addConditionNode(position?: { x: number; y: number }) {
 
   selectedNodeId.value = id
   selectedEdgeId.value = null
+  return id
+}
+
+function createConditionFromClass(courseNodeId: string, classId: number) {
+  const courseNode = nodes.value.find((n) => n.id === courseNodeId && n.type === 'course')
+  if (!courseNode) return
+  const classes = (courseNode.data?.payload?.classes || []) as Array<{ id: number }>
+  const classIndex = classes.findIndex((cls) => Number(cls.id) === Number(classId))
+  if (classIndex < 0) return
+
+  const ROW_H = 72
+  const ROW_GAP = 9
+  const START_Y = 80 + 56 + 40 + 12 + 15
+  const anchorY = courseNode.position.y + START_Y + classIndex * (ROW_H + ROW_GAP) + ROW_H / 2
+  const conditionPos = {
+    x: courseNode.position.x + 470,
+    y: anchorY - 60,
+  }
+
+  const nextConnection: Connection = {
+    source: courseNodeId,
+    sourceHandle: `class-out:${classId}`,
+    target: '',
+    targetHandle: 'if-in',
+  }
+  const validation = validateConditionConnectionLimits({
+    ...nextConnection,
+    target: 'new-condition',
+  })
+  if (!validation.ok) {
+    toast({
+      title: 'Conexao nao permitida',
+      description: validation.reason,
+      variant: 'destructive',
+    })
+    return
+  }
+
+  const conditionId = addConditionNode(conditionPos)
+  if (!conditionId) return
+  const kind = edgeKindFromHandles(String(nextConnection.sourceHandle), String(nextConnection.targetHandle))
+  const executionMode = getStartExecutionMode()
+  const style = edgeStyle(kind, executionMode)
+  const edgeId = uid()
+  setEdges([
+    ...edges.value,
+    {
+      id: edgeId,
+      source: courseNodeId,
+      sourceHandle: `class-out:${classId}`,
+      target: conditionId,
+      targetHandle: 'if-in',
+      type: 'smooth',
+      style,
+      data: { kind, auto: true, executionMode, animateIn: true },
+    },
+  ])
+  connectMode.value = true
+  toast({
+    title: 'Condicao criada',
+    description: 'Nova condicao criada e conectada. Agora voce pode ligar para turmas de destino.',
+  })
 }
 
 function removeNode(nodeId: string) {
@@ -1370,7 +1460,7 @@ function handleConnect(params: Connection) {
       id,
       type: 'smooth',
       style,
-      data: {kind, auto: false, executionMode},
+      data: {kind, auto: false, executionMode, animateIn: true},
     },
   ]
 

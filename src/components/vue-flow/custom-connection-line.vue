@@ -22,7 +22,7 @@ defineProps({
 <template>
   <g>
     <path
-      class="vue-flow__connection animated"
+      class="vue-flow__connection animated connection-preview"
       fill="none"
       stroke="#6F3381"
       :stroke-width="2.5"
@@ -32,3 +32,16 @@ defineProps({
     <circle :cx="targetX" :cy="targetY" fill="#fff" :r="4" stroke="#6F3381" :stroke-width="1.5" />
   </g>
 </template>
+
+<style>
+@keyframes previewDash {
+  to {
+    stroke-dashoffset: -16;
+  }
+}
+
+.connection-preview {
+  stroke-dasharray: 7 6;
+  animation: previewDash 0.6s linear infinite;
+}
+</style>

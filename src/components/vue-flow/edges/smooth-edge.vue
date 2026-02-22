@@ -35,6 +35,7 @@ const isDashed = computed(() => {
   const style = props.style as Record<string, unknown> | undefined
   return props.data?.executionMode === 'recurring' || !!style?.strokeDasharray
 })
+const isConnectIn = computed(() => !!props.data?.animateIn)
 
 function handleClick(event: MouseEvent) {
   event.stopPropagation()
@@ -48,7 +49,7 @@ function handleClick(event: MouseEvent) {
       :d="edgePath"
       fill="none"
       :style="props.style"
-      :class="isDashed ? 'edge-dashed' : ''"
+      :class="[isDashed ? 'edge-dashed' : '', isConnectIn ? 'edge-connect-in' : '']"
       :marker-end="props.markerEnd"
     />
     <path
@@ -91,5 +92,22 @@ function handleClick(event: MouseEvent) {
 
 .edge-dashed {
   animation: edgeDash 0.9s linear infinite;
+}
+
+@keyframes edgeConnectIn {
+  from {
+    stroke-dasharray: 8 220;
+    stroke-dashoffset: 220;
+    opacity: 0.35;
+  }
+  to {
+    stroke-dasharray: 0 0;
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+}
+
+.edge-connect-in {
+  animation: edgeConnectIn 0.45s ease-out;
 }
 </style>

@@ -63,10 +63,10 @@ const START_Y = HEADER_H + STATS_H + SECTION_HEADER_H + PAD_TOP +15
 
 <template>
   <div
-      class="rounded-3xl transition-all"
-      :class="selected ? 'ring-2 ring-blue-500 shadow-2xl' : 'shadow-lg'"
+      class="relative rounded-3xl transition-all duration-150"
+      :class="selected ? 'z-40 ring-2 ring-blue-500 shadow-2xl' : 'z-10 shadow-lg hover:z-30 hover:-translate-y-0.5 hover:shadow-2xl'"
   >
-    <div class="relative w-[400px] rounded-3xl border border-slate-200/80 bg-white overflow-hidden">
+    <div class="relative w-[400px] rounded-3xl border border-slate-200/80 bg-white overflow-visible">
       <!-- Connection Handles -->
       <template v-for="(cls, idx) in data.payload.classes" :key="`h:${cls.id}`">
         <PortDotHandle
@@ -75,6 +75,8 @@ const START_Y = HEADER_H + STATS_H + SECTION_HEADER_H + PAD_TOP +15
             :position="Position.Left"
             :title="`Entrada turma ${cls.name}`"
             :active="!!data.connectMode"
+            :size="20"
+            hint="Solte aqui a conexao"
             tone="neutral"
             :top-px="START_Y + idx * (ROW_H + ROW_GAP) + ROW_H / 2"
         />
@@ -84,8 +86,11 @@ const START_Y = HEADER_H + STATS_H + SECTION_HEADER_H + PAD_TOP +15
             :position="Position.Right"
             :title="`Saida turma ${cls.name}`"
             :active="!!data.connectMode"
+            :size="20"
+            hint="Arraste para existente ou clique para nova"
             tone="next"
             :top-px="START_Y + idx * (ROW_H + ROW_GAP) + ROW_H / 2"
+            @handle-click="data.onCreateConditionForClass?.(data.nodeId, Number(cls.id))"
         />
       </template>
 

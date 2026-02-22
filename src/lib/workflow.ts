@@ -52,6 +52,8 @@ export type CourseNodeData = {
     connectMode: boolean
     nodeId: string
     onRemove?: (nodeId: string) => void
+    onCreateConditionForClass?: (courseNodeId: string, classId: number) => void
+    onEnableConnectMode?: () => void
 }
 
 export type ConditionNodeData = {

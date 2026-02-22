@@ -44,7 +44,6 @@ const HEADER_H = 56
         tone="nok"
         top="calc(50% + 10px)"
       />
-
       <div class="flex items-center justify-between px-3 py-2 cursor-grab" :style="{ height: `${HEADER_H}px` }">
         <div class="min-w-0 flex items-center gap-2">
           <div class="flex h-9 w-9 items-center justify-center rounded-lg border bg-slate-50">

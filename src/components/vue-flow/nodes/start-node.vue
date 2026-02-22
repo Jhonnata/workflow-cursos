@@ -9,7 +9,10 @@ defineProps<NodeProps<StartNodeData>>()
 </script>
 
 <template>
-  <div class="rounded-2xl shadow-md" :class="selected ? 'ring-2 ring-emerald-500' : ''">
+  <div
+    class="relative rounded-2xl shadow-md transition-all duration-150"
+    :class="selected ? 'z-40 ring-2 ring-emerald-500' : 'z-10 hover:z-30 hover:-translate-y-0.5 hover:shadow-xl'"
+  >
     <div class="relative w-[220px] rounded-2xl border border-emerald-200 bg-emerald-50/60">
       <PortDotHandle
         id="start-out"
