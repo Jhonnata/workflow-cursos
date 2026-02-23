@@ -623,6 +623,7 @@ const classMetaByName = computed(() => {
 const rows = ref<RowItem[]>([])
 const edit = ref<EditState | null>(null)
 const searchQuery = ref('')
+const classStatusFilter = ref<'inProgress' | 'concluded' | 'incomplete' | 'all'>('inProgress')
 const runId = ref('')
 const hasLoadedRows = ref(false)
 const totalCount = ref(0)
@@ -853,6 +854,7 @@ async function loadApprenticeWorkflows() {
       limit: pageLimit.value,
       offset: pageOffset.value,
       q: q || undefined,
+      classStatus: classStatusFilter.value || 'inProgress',
     })
     const payload = res.data as any
     const list: ApiApprentice[] = Array.isArray(payload)
@@ -1018,6 +1020,19 @@ watch(
       loadApprenticeWorkflows()
       searchDebounceTimer = null
     }, 350)
+  },
+)
+
+watch(
+  () => classStatusFilter.value,
+  () => {
+    if (searchDebounceTimer) {
+      clearTimeout(searchDebounceTimer)
+      searchDebounceTimer = null
+    }
+    pageOffset.value = 0
+    hasLoadedRows.value = false
+    loadApprenticeWorkflows()
   },
 )
 
@@ -1467,6 +1482,18 @@ async function saveEdit() {
         <div class="flex items-center gap-2">
           <div class="flex-1">
             <Input v-model="searchQuery" placeholder="Buscar por nome, CPF ou email..." class="h-9" />
+          </div>
+          <div class="w-[220px]">
+            <select
+                v-model="classStatusFilter"
+                class="h-9 w-full rounded-md border border-slate-200 bg-white px-2 text-xs"
+                title="Filtrar por status da turma"
+            >
+              <option value="inProgress">Status: Em andamento</option>
+              <option value="concluded">Status: Concluido</option>
+              <option value="incomplete">Status: Incompleto</option>
+              <option value="all">Status: Todos</option>
+            </select>
           </div>
         </div>
         <div class="flex items-center justify-between gap-2 mt-2">
