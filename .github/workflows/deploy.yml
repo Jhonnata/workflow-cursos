@@ -33,5 +33,5 @@ jobs:
           username: ${{ secrets.SFTP_USERNAME }}
           password: ${{ secrets.SFTP_PASSWORD }}
           uploads: |
-            ./dist/ => ./public_html/
+            ./dist/ => /home/u384672866/websites/nDkhILDZZ/public_html/
           delete: true
