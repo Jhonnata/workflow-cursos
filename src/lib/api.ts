@@ -134,6 +134,7 @@ export const api = {
       contract?: string
       classId?: string | number
       classStatus?: string
+      transitionsLimit?: number
     },
   ) {
     const id = encodeURIComponent(String(workflowId))
@@ -145,7 +146,12 @@ export const api = {
     if (params?.classId !== undefined && params?.classId !== null && params?.classId !== '') {
       search.set('classId', String(params.classId))
     }
-    if (params?.classStatus) search.set('classStatus', String(params.classStatus))
+    if (params?.classStatus && params.classStatus !== 'all') {
+      search.set('classStatus', String(params.classStatus))
+    }
+    if (params?.transitionsLimit !== undefined && params.transitionsLimit !== null) {
+      search.set('transitionsLimit', String(params.transitionsLimit))
+    }
     const suffix = search.toString()
     return tryFetch(`${BASE_URL}/workflows/${id}/apprentices${suffix ? `?${suffix}` : ''}`, {}, [])
   },

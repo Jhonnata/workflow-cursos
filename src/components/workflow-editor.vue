@@ -1,13 +1,14 @@
 ﻿<script setup lang="ts">
-import {computed, markRaw, onMounted, ref, watch} from 'vue'
-import {useRouter} from 'vue-router'
-import {Background} from '@vue-flow/background'
-import {Controls} from '@vue-flow/controls'
-import {VueFlow, type Connection} from '@vue-flow/core'
-import {useVueFlow} from '@vue-flow/core'
+import { computed, markRaw, onMounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
+import { Background } from '@vue-flow/background'
+import { Controls } from '@vue-flow/controls'
+import { VueFlow, type Connection } from '@vue-flow/core'
+import { useVueFlow } from '@vue-flow/core'
 import {
   ChevronDown,
   ChevronRight,
+  FileText,
   Link2,
   Pencil,
   Play,
@@ -15,15 +16,15 @@ import {
   Save,
   Trash2,
   Unlink,
-  Users,
+  Users
 } from 'lucide-vue-next'
-import {Button} from '@/components/ui/button'
-import {DatePicker} from '@/components/ui/date-picker'
-import {Input} from '@/components/ui/input'
-import {Label} from '@/components/ui/label'
-import {ScrollArea} from '@/components/ui/scroll-area'
-import {Switch} from '@/components/ui/switch'
-import {Textarea} from '@/components/ui/textarea'
+import { Button } from '@/components/ui/button'
+import { DatePicker } from '@/components/ui/date-picker'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { ScrollArea } from '@/components/ui/scroll-area'
+import { Switch } from '@/components/ui/switch'
+import { Textarea } from '@/components/ui/textarea'
 import ConditionConfigForm from '@/components/condition-config-form.vue'
 import {
   Dialog,
@@ -32,63 +33,65 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
+  DialogTrigger
 } from '@/components/ui/dialog'
 import SmoothEdge from '@/components/vue-flow/edges/smooth-edge.vue'
 import CustomConnectionLine from '@/components/vue-flow/custom-connection-line.vue'
+import CommentNode from '@/components/vue-flow/nodes/comment-node.vue'
 import ConditionNode from '@/components/vue-flow/nodes/condition-node.vue'
 import CourseNode from '@/components/vue-flow/nodes/course-node.vue'
 import StartNode from '@/components/vue-flow/nodes/start-node.vue'
 import WorkflowGridPreview from '@/components/workflow-grid-preview.vue'
-import {useToast} from '@/components/ui/toast'
+import { useToast } from '@/components/ui/toast'
 import {
   buildCoursePayload,
   EXECUTION_MODE_OPTIONS,
+  commentNodeId,
   conditionNodeId,
   courseNodeId,
   edgeKindFromHandles,
   edgeStroke,
-  parseCourseId,
   portColor,
   START_NODE_ID,
   uid,
   onlyWithContractFlag,
+  type CommentPayload,
   type StartPayload,
   type ConditionPayload,
   type Course,
-  type CourseClass,
+  type CourseClass
 } from '@/lib/workflow'
-import {api} from '@/lib/api'
+import { api } from '@/lib/api'
+import {
+  buildEdgeDataFromConnection,
+  buildWorkflowPayload,
+  validateWorkflowPayload,
+  WorkflowPayloadError
+} from '@/lib/workflow-payload'
 
-const {toast} = useToast()
+const { toast } = useToast()
 const router = useRouter()
 const props = defineProps<{
   flowId: string
   workflowId?: string | number
   initialTab?: 'workflow' | 'evolution'
 }>()
-const {
-  nodes,
-  edges,
-  setNodes,
-  setEdges,
-  project,
-  onNodesChange,
-  onEdgesChange,
-  addNodes
-} = useVueFlow({
-  id: props.flowId,
+const { nodes, edges, setNodes, setEdges, project, onNodesChange, onEdgesChange, addNodes } = useVueFlow({
+  id: props.flowId
 })
 
 const nodeTypes = {
+  comment: markRaw(CommentNode),
   course: markRaw(CourseNode),
   condition: markRaw(ConditionNode),
-  start: markRaw(StartNode),
+  start: markRaw(StartNode)
 }
 
 const edgeTypes = {
-  smooth: markRaw(SmoothEdge),
+  smooth: markRaw(SmoothEdge)
 }
+
+type PaletteNodeType = 'start' | 'condition' | 'comment'
 
 const apiCourses = ref<Course[]>([])
 const apiClasses = ref<CourseClass[]>([])
@@ -102,11 +105,13 @@ function formatApiError(e: unknown) {
     typeof err?.message === 'string' && err.message.trim()
       ? err.message.trim()
       : 'Nao foi possivel completar a operacao.'
-  const errors = Array.isArray(err?.errors)
-    ? err.errors.map((item: any) => String(item)).filter(Boolean)
-    : []
+  const errors = Array.isArray(err?.errors) ? err.errors.map((item: any) => String(item)).filter(Boolean) : []
   if (errors.length === 0) return message
   return `${message} Erros: ${errors.join(' | ')}`
+}
+
+function formatWorkflowPayloadIssues(error: WorkflowPayloadError) {
+  return error.issues.map((issue) => `Edge ${issue.edgeId}: ${issue.message}`).join(' | ')
 }
 
 function formatDayOfWeek(value?: string | null) {
@@ -149,7 +154,7 @@ function formatDayOfWeek(value?: string | null) {
     domingo: 'Domingo',
     dom: 'Domingo',
     '0': 'Domingo',
-    '7': 'Domingo',
+    '7': 'Domingo'
   }
   return map[normalized] || raw
 }
@@ -195,7 +200,7 @@ function formatDateTime(value: any) {
 
 function scheduleExecutionModeLabel(schedule: any) {
   const mode = String(
-    schedule?.executionMode ?? schedule?.mode ?? schedule?.configuration?.executionMode ?? '',
+    schedule?.executionMode ?? schedule?.mode ?? schedule?.configuration?.executionMode ?? ''
   ).toLowerCase()
   if (mode === 'recurring') return 'Recorrente'
   if (mode === 'once') return 'Unica'
@@ -216,9 +221,7 @@ function scheduleFrequencyLabel(schedule: any) {
 }
 
 function scheduleNextExecutionLabel(schedule: any) {
-  return formatDateTime(
-    schedule?.nextExecution ?? schedule?.scheduledAt ?? schedule?.configuration?.nextExecution,
-  )
+  return formatDateTime(schedule?.nextExecution ?? schedule?.scheduledAt ?? schedule?.configuration?.nextExecution)
 }
 
 function scheduleLastExecutionLabel(schedule: any) {
@@ -240,43 +243,43 @@ const workflowMode = ref<'list' | 'editor'>('list')
 const conditionDetailsOpenId = ref<string | null>(null)
 const activeWorkflow = ref<{ id?: string | number; name: string; description: string; status: string } | null>(null)
 const activeWorkflowGraphId = ref<string | number | null>(null)
-const newWorkflow = ref({name: '', description: '', status: 'active'})
+const newWorkflow = ref({ name: '', description: '', status: 'active' })
 const createWorkflowOpen = ref(false)
 const editWorkflowOpen = ref(false)
 const editWorkflow = ref<{ id: string | number; name: string; description: string; status: string } | null>(null)
 const workflowStatusOptions = [
-  {value: 'active', label: 'Ativo'},
-  {value: 'inactive', label: 'Inativo'},
-  {value: 'draft', label: 'Rascunho'},
+  { value: 'active', label: 'Ativo' },
+  { value: 'inactive', label: 'Inativo' },
+  { value: 'draft', label: 'Rascunho' }
 ]
 const repeatIntervalOptions = [
-  {value: '', label: 'Nao repetir'},
-  {value: '10', label: 'A cada 10 min'},
-  {value: '20', label: 'A cada 20 min'},
-  {value: '30', label: 'A cada 30 min'},
-  {value: '60', label: 'A cada 1h'},
-  {value: '90', label: 'A cada 1h30'},
-  {value: '120', label: 'A cada 2h'},
+  { value: '', label: 'Nao repetir' },
+  { value: '10', label: 'A cada 10 min' },
+  { value: '20', label: 'A cada 20 min' },
+  { value: '30', label: 'A cada 30 min' },
+  { value: '60', label: 'A cada 1h' },
+  { value: '90', label: 'A cada 1h30' },
+  { value: '120', label: 'A cada 2h' }
 ]
 
 function setActiveWorkflow(
-    wf: any,
-    opts?: { mode?: 'list' | 'editor'; tab?: 'workflow' | 'evolution'; notify?: boolean },
+  wf: any,
+  opts?: { mode?: 'list' | 'editor'; tab?: 'workflow' | 'evolution'; notify?: boolean }
 ) {
   if (!wf) return
+  const inlineGraph = normalizeWorkflowGraph(wf)
   const prevId = activeWorkflow.value?.id
   activeWorkflow.value = {
     id: wf.id,
     name: wf.name || '',
     description: wf.description || '',
-    status: wf.status || 'active',
+    status: wf.status || 'active'
   }
-  const hasGraph = Array.isArray(wf?.nodes) || Array.isArray(wf?.edges)
-  const sameWorkflow =
-      prevId !== undefined && prevId !== null && String(prevId) === String(wf.id)
+  const hasGraph = inlineGraph.nodes.length > 0 || inlineGraph.edges.length > 0
+  const sameWorkflow = prevId !== undefined && prevId !== null && String(prevId) === String(wf.id)
   if (hasGraph) {
-    setNodes(wf.nodes || [])
-    setEdges(wf.edges || [])
+    setNodes(inlineGraph.nodes)
+    setEdges(inlineGraph.edges)
     activeWorkflowGraphId.value = wf.id
   } else if (!sameWorkflow) {
     setNodes([])
@@ -293,7 +296,7 @@ function setActiveWorkflow(
   if (opts?.notify) {
     toast({
       title: 'Workflow carregado',
-      description: `Workflow "${wf.name}" foi carregado com sucesso.`,
+      description: `Workflow "${wf.name}" foi carregado com sucesso.`
     })
   }
 }
@@ -331,9 +334,7 @@ function normalizeWorkflowGraph(payload: any) {
       .map((item) => {
         if (!item) return null
         const data = parseMaybeJson(item.payloadJson) ?? {}
-        const baseData = data?.payload
-          ? data
-          : { payload: data || {}, nodeId: item.nodeKey }
+        const baseData = data?.payload ? data : { payload: data || {}, nodeId: item.nodeKey }
         return {
           id: item.nodeKey ?? String(item.id),
           type: item.type,
@@ -341,8 +342,8 @@ function normalizeWorkflowGraph(payload: any) {
           data: {
             ...(baseData || {}),
             connectMode: baseData?.connectMode ?? false,
-            nodeId: item.nodeKey ?? baseData?.nodeId ?? String(item.id),
-          },
+            nodeId: item.nodeKey ?? baseData?.nodeId ?? String(item.id)
+          }
         }
       })
       .filter(Boolean)
@@ -358,7 +359,7 @@ function normalizeWorkflowGraph(payload: any) {
           sourceHandle: item.sourceHandle ?? item.source_handle ?? null,
           targetHandle: item.targetHandle ?? item.target_handle ?? null,
           type: 'smooth',
-          data,
+          data
         }
       })
       .filter((edge) => edge?.source && edge?.target)
@@ -402,7 +403,7 @@ async function loadWorkflowGraph(workflowId: string | number, opts?: { notify?: 
     if (opts?.notify) {
       toast({
         title: 'Workflow carregado',
-        description: `Workflow "${activeWorkflow.value?.name || ''}" foi carregado com sucesso.`,
+        description: `Workflow "${activeWorkflow.value?.name || ''}" foi carregado com sucesso.`
       })
     }
   } catch (e) {
@@ -410,14 +411,14 @@ async function loadWorkflowGraph(workflowId: string | number, opts?: { notify?: 
     toast({
       title: 'Erro ao carregar workflow',
       description: formatApiError(e),
-      variant: 'destructive',
+      variant: 'destructive'
     })
   }
 }
 
 const classesByCourse = computed(() => {
   const map: Record<number, any[]> = {}
-  apiClasses.value.forEach(cls => {
+  apiClasses.value.forEach((cls) => {
     // @ts-ignore
     const cId = cls.courseId
     if (cId) {
@@ -441,10 +442,7 @@ const courses = computed(() => {
 })
 
 function courseApprenticesTotal(courseId: number) {
-  return (classesByCourse.value[courseId] || []).reduce(
-    (acc, curr) => acc + Number(curr?.stats?.total || 0),
-    0,
-  )
+  return (classesByCourse.value[courseId] || []).reduce((acc, curr) => acc + Number(curr?.stats?.total || 0), 0)
 }
 
 const filteredWorkflows = computed(() => {
@@ -475,7 +473,7 @@ onMounted(async () => {
       api.getCourses(),
       api.getClasses(),
       api.getWorkflows(),
-      api.getWorkflowSchedules(),
+      api.getWorkflowSchedules()
     ])
     apiCourses.value = cRes.data
     apiClasses.value = clRes.data
@@ -514,36 +512,36 @@ async function applyRouteSelection() {
 }
 
 watch(
-    () => [props.workflowId, props.initialTab, apiWorkflows.value.length],
-    () => {
-      void applyRouteSelection()
-    },
-    {immediate: true},
+  () => [props.workflowId, props.initialTab, apiWorkflows.value.length],
+  () => {
+    void applyRouteSelection()
+  },
+  { immediate: true }
 )
 
 function goToWorkflowTab() {
   mainTab.value = 'workflow'
   if (activeWorkflow.value?.id !== undefined) {
     workflowMode.value = 'editor'
-    router.push({name: 'workflow', params: {id: activeWorkflow.value.id}})
+    router.push({ name: 'workflow', params: { id: activeWorkflow.value.id } })
     if (
-        activeWorkflowGraphId.value === null ||
-        String(activeWorkflowGraphId.value) !== String(activeWorkflow.value.id)
+      activeWorkflowGraphId.value === null ||
+      String(activeWorkflowGraphId.value) !== String(activeWorkflow.value.id)
     ) {
       void loadWorkflowGraph(activeWorkflow.value.id)
     }
   } else {
     workflowMode.value = 'list'
-    router.push({name: 'home'})
+    router.push({ name: 'home' })
   }
 }
 
 function goToEvolutionTab() {
   mainTab.value = 'evolution'
   if (activeWorkflow.value?.id !== undefined) {
-    router.push({name: 'workflow-apprentices', params: {id: activeWorkflow.value.id}})
+    router.push({ name: 'workflow-apprentices', params: { id: activeWorkflow.value.id } })
   } else {
-    router.push({name: 'home'})
+    router.push({ name: 'home' })
   }
 }
 
@@ -565,7 +563,7 @@ function openEditWorkflow(wf: any) {
     id: wf.id,
     name: wf.name || '',
     description: wf.description || '',
-    status: wf.status || 'active',
+    status: wf.status || 'active'
   }
   editWorkflowOpen.value = true
 }
@@ -576,6 +574,14 @@ const selectedConditionRequiresContract = computed(() => {
   return conditionRequiresContract(selectedNode.value.id)
 })
 
+function nodeTypeLabel(type?: string | null) {
+  if (type === 'condition') return 'IF'
+  if (type === 'start') return 'INICIO'
+  if (type === 'comment') return 'COMENTÁRIO'
+  if (type === 'course') return 'CURSO'
+  return '-'
+}
+
 const flowWrapper = ref<HTMLDivElement | null>(null)
 
 function getViewportCenterPosition(nodeSize: { width: number; height: number }) {
@@ -583,32 +589,37 @@ function getViewportCenterPosition(nodeSize: { width: number; height: number }) 
   if (!bounds) return { x: 250, y: 150 }
   const center = project({
     x: bounds.left + bounds.width / 2,
-    y: bounds.top + bounds.height / 2,
+    y: bounds.top + bounds.height / 2
   })
   return {
     x: center.x - nodeSize.width / 2,
-    y: center.y - nodeSize.height / 2,
+    y: center.y - nodeSize.height / 2
   }
 }
 
-onNodesChange((changes) => {
+onNodesChange((_changes) => {
   // We can let Vue Flow handle the changes automatically since nodes is a ref from useVueFlow
 })
 
-onEdgesChange((changes) => {
-})
-
-watch([() => nodes.value.filter(n => n?.selected).map(n => n.id), () => edges.value.filter(e => e?.selected).map(e => e.id)], ([selNodes, selEdges]) => {
-  selectedNodeId.value = selNodes[0] ?? null
-  selectedEdgeId.value = selEdges[0] ?? null
-})
+onEdgesChange((_changes) => {})
 
 watch(
-    () => edges.value,
-    () => {
-      enforceContractCheckForConditions()
-    },
-    {deep: true},
+  [
+    () => nodes.value.filter((n) => n?.selected).map((n) => n.id),
+    () => edges.value.filter((e) => e?.selected).map((e) => e.id)
+  ],
+  ([selNodes, selEdges]) => {
+    selectedNodeId.value = selNodes[0] ?? null
+    selectedEdgeId.value = selEdges[0] ?? null
+  }
+)
+
+watch(
+  () => edges.value,
+  () => {
+    enforceContractCheckForConditions()
+  },
+  { deep: true }
 )
 
 function toggleConditionDetails(nodeId: string) {
@@ -617,84 +628,119 @@ function toggleConditionDetails(nodeId: string) {
   if (willOpen && rightPanelCollapsed.value) rightPanelCollapsed.value = false
 }
 
+function hydrateCourseClasses(courseId: number, classes: any[]) {
+  const apiMap = new Map((classesByCourse.value[courseId] ?? []).map((cls) => [Number(cls.id), cls]))
+  return (Array.isArray(classes) ? classes : [])
+    .map((cls) => {
+      const id = Number(cls?.id)
+      if (!Number.isFinite(id)) return null
+      const apiClass = apiMap.get(id)
+      return {
+        ...(apiClass || {}),
+        ...(cls || {}),
+        id,
+        identifier: String(cls?.identifier ?? apiClass?.identifier ?? ''),
+        name: String(cls?.name ?? apiClass?.name ?? '')
+      }
+    })
+    .filter(Boolean)
+}
+
+function hydrateCoursePayload(payload?: Record<string, any> | null) {
+  const courseId = Number(payload?.courseId)
+  const fallbackName = apiCourses.value.find((course) => Number(course.id) === courseId)?.name ?? ''
+  return {
+    ...(payload || {}),
+    courseId: Number.isFinite(courseId) ? courseId : 0,
+    courseName: String(payload?.courseName ?? fallbackName ?? ''),
+    classes: hydrateCourseClasses(courseId, payload?.classes || [])
+  }
+}
+
 function syncNodeMeta() {
   setNodes(
-      nodes.value.map((n) => {
-        let payload = n.data?.payload
-        if (n.type === 'condition') {
-          const evolutionMode =
-            n.data?.payload?.evolutionMode ??
-            (n.data?.payload?.useClassEndDate
-              ? 'classEnd'
-              : n.data?.payload?.evolveAt
-                ? 'specific'
-                : n.data?.payload?.startDate || n.data?.payload?.endDate
-                  ? 'range'
-                  : 'none')
-          payload = {
-            ...(n.data?.payload || {}),
-            evolutionMode,
-            evolveAt: n.data?.payload?.evolveAt ?? '',
-            startDate: n.data?.payload?.startDate ?? '',
-            endDate: n.data?.payload?.endDate ?? '',
-            manualEvolution: n.data?.payload?.manualEvolution ?? false,
-            useClassEndDate: evolutionMode === 'classEnd' ? true : false,
-            classInsertStatus: n.data?.payload?.classInsertStatus ?? 'inProgress',
-            classExitStatus: n.data?.payload?.classExitStatus ?? 'conclude',
-            classCheckStatus: n.data?.payload?.classCheckStatus ?? 'inProgress',
-            checkContractDuration:
-              n.data?.payload?.checkContractDuration ?? n.data?.payload?.checkContractTime ?? false,
-            contractDurationMonths:
-              n.data?.payload?.contractDurationMonths ??
-              (n.data?.payload?.contractTime ? Number(n.data?.payload?.contractTime) : undefined),
-            keepSameDayOfWeek: n.data?.payload?.keepSameDayOfWeek ?? false,
-          }
-        } else if (n.type === 'start') {
-          payload = {
-            ...(n.data?.payload || {}),
-            executionMode: n.data?.payload?.executionMode ?? 'once',
-            startDate: n.data?.payload?.startDate ?? '',
-            endDate: n.data?.payload?.endDate ?? '',
-            runDailyAt: n.data?.payload?.runDailyAt ?? '08:00',
-            runIntervalMinutes: n.data?.payload?.runIntervalMinutes ?? null,
-          }
+    nodes.value.map((n) => {
+      let payload = n.data?.payload
+      if (n.type === 'course') {
+        payload = hydrateCoursePayload(n.data?.payload)
+      } else if (n.type === 'condition') {
+        const evolutionMode =
+          n.data?.payload?.evolutionMode ??
+          (n.data?.payload?.useClassEndDate
+            ? 'classEnd'
+            : n.data?.payload?.evolveAt
+              ? 'specific'
+              : n.data?.payload?.startDate || n.data?.payload?.endDate
+                ? 'range'
+                : 'none')
+        payload = {
+          ...(n.data?.payload || {}),
+          evolutionMode,
+          evolveAt: n.data?.payload?.evolveAt ?? '',
+          startDate: n.data?.payload?.startDate ?? '',
+          endDate: n.data?.payload?.endDate ?? '',
+          manualEvolution: n.data?.payload?.manualEvolution ?? false,
+          useClassEndDate: evolutionMode === 'classEnd' ? true : false,
+          classInsertStatus: n.data?.payload?.classInsertStatus ?? 'inProgress',
+          classExitStatus: n.data?.payload?.classExitStatus ?? 'conclude',
+          classCheckStatus: n.data?.payload?.classCheckStatus ?? 'inProgress',
+          checkContractDuration: n.data?.payload?.checkContractDuration ?? n.data?.payload?.checkContractTime ?? false,
+          contractDurationMonths:
+            n.data?.payload?.contractDurationMonths ??
+            (n.data?.payload?.contractTime ? Number(n.data?.payload?.contractTime) : undefined),
+          keepSameDayOfWeek: n.data?.payload?.keepSameDayOfWeek ?? false
         }
+      } else if (n.type === 'start') {
+        payload = {
+          ...(n.data?.payload || {}),
+          executionMode: n.data?.payload?.executionMode ?? 'once',
+          startDate: n.data?.payload?.startDate ?? '',
+          endDate: n.data?.payload?.endDate ?? '',
+          runDailyAt: n.data?.payload?.runDailyAt ?? '08:00',
+          runIntervalMinutes: n.data?.payload?.runIntervalMinutes ?? null
+        }
+      } else if (n.type === 'comment') {
+        payload = {
+          ...(n.data?.payload || {}),
+          text: String(n.data?.payload?.text ?? '')
+        }
+      }
 
-        return {
-          ...n,
-          data: {
-            ...n.data,
-            connectMode: connectMode.value,
-            payload,
-            onRemove: removeNode,
-            nodeId: n.id,
-            ...(n.type === 'course'
-                ? {
-                  onCreateConditionForClass: createConditionFromClass,
-                  onEnableConnectMode: () => {
-                    connectMode.value = true
-                    toast({
-                      title: 'Modo conectar ativado',
-                      description: 'Arraste a saida da turma para uma condicao existente.',
-                    })
-                  },
+      return {
+        ...n,
+        data: {
+          ...n.data,
+          connectMode: connectMode.value,
+          payload,
+          onRemove: removeNode,
+          nodeId: n.id,
+          ...(n.type === 'course'
+            ? {
+                onCreateConditionForClass: createConditionFromClass,
+                onEnableConnectMode: () => {
+                  connectMode.value = true
+                  toast({
+                    title: 'Modo conectar ativado',
+                    description: 'Arraste a saida da turma para uma condicao existente.'
+                  })
                 }
-                : {}),
-            ...(n.type === 'condition'
-                ? {
-                  showDetails: conditionDetailsOpenId.value === n.id,
-                  onToggleDetails: toggleConditionDetails,
-                }
-                : {}),
-          },
+              }
+            : {}),
+          ...(n.type === 'condition'
+            ? {
+                showDetails: conditionDetailsOpenId.value === n.id,
+                onToggleDetails: toggleConditionDetails
+              }
+            : {})
         }
-      }),
+      }
+    })
   )
 }
 
-
 watch(connectMode, syncNodeMeta)
 watch(conditionDetailsOpenId, syncNodeMeta)
+watch(() => [apiClasses.value.length, apiCourses.value.length], syncNodeMeta)
 
 function toggleExpanded(courseId: number) {
   const next = new Set(expandedCourses.value)
@@ -704,27 +750,27 @@ function toggleExpanded(courseId: number) {
 }
 
 function setPreselectForCourse(courseId: number, next: Set<number>) {
-  preselect.value = {...preselect.value, [courseId]: next}
+  preselect.value = { ...preselect.value, [courseId]: next }
 
   const id = courseNodeId(courseId)
   const classes = (classesByCourse.value[courseId] ?? []).filter((c) => next.has(c.id))
   if (!nodes.value.some((n) => n.id === id)) return
 
   setNodes(
-      nodes.value.map((n) =>
-          n.id !== id
-              ? n
-              : {
-                ...n,
-                data: {
-                  ...n.data,
-                  payload: {
-                    ...n.data?.payload,
-                    classes,
-                  },
-                },
-              },
-      ),
+    nodes.value.map((n) =>
+      n.id !== id
+        ? n
+        : {
+            ...n,
+            data: {
+              ...n.data,
+              payload: {
+                ...n.data?.payload,
+                classes
+              }
+            }
+          }
+    )
   )
 }
 
@@ -758,19 +804,19 @@ function addStartNode(position?: { x: number; y: number }) {
   const newNode = {
     id,
     type: 'start',
-    position: position ?? {x: 40, y: 40},
+    position: position ?? { x: 40, y: 40 },
     data: {
       payload: {
         executionMode: 'once',
         startDate: '',
         endDate: '',
         runDailyAt: '08:00',
-        runIntervalMinutes: null,
+        runIntervalMinutes: null
       },
       connectMode: connectMode.value,
       onRemove: removeNode,
-      nodeId: id,
-    },
+      nodeId: id
+    }
   }
 
   addNodes([newNode])
@@ -795,34 +841,34 @@ function addCourseNode(courseId: number, position?: { x: number; y: number }) {
     }
 
     setNodes(
-        nodes.value.map((n) =>
-            n.id !== id
-                ? n
-                : {
-                  ...n,
-                  data: {
-                    ...n.data,
-                    payload: {...n.data?.payload, ...payload, classes: merged},
-                    connectMode: connectMode.value,
-                    onRemove: removeNode,
-                    onCreateConditionForClass: createConditionFromClass,
-                    onEnableConnectMode: () => {
-                      connectMode.value = true
-                      toast({
-                        title: 'Modo conectar ativado',
-                        description: 'Arraste a saida da turma para uma condicao existente.',
-                      })
-                    },
-                    nodeId: id,
-                  },
+      nodes.value.map((n) =>
+        n.id !== id
+          ? n
+          : {
+              ...n,
+              data: {
+                ...n.data,
+                payload: { ...n.data?.payload, ...payload, classes: merged },
+                connectMode: connectMode.value,
+                onRemove: removeNode,
+                onCreateConditionForClass: createConditionFromClass,
+                onEnableConnectMode: () => {
+                  connectMode.value = true
+                  toast({
+                    title: 'Modo conectar ativado',
+                    description: 'Arraste a saida da turma para uma condicao existente.'
+                  })
                 },
-        ),
+                nodeId: id
+              }
+            }
+      )
     )
   } else {
     const newNode = {
       id,
       type: 'course',
-      position: position ?? {x: 80, y: 80},
+      position: position ?? { x: 80, y: 80 },
       data: {
         payload,
         connectMode: connectMode.value,
@@ -832,11 +878,11 @@ function addCourseNode(courseId: number, position?: { x: number; y: number }) {
           connectMode.value = true
           toast({
             title: 'Modo conectar ativado',
-            description: 'Arraste a saida da turma para uma condicao existente.',
+            description: 'Arraste a saida da turma para uma condicao existente.'
           })
         },
-        nodeId: id,
-      },
+        nodeId: id
+      }
     }
     addNodes([newNode])
   }
@@ -852,12 +898,12 @@ function addConditionNode(position?: { x: number; y: number }) {
     endDate: '',
     evolveAt: '',
     evolutionMode: 'none',
-      manualEvolution: false,
-      minAttendance: 100,
-      minExamGrade: 0,
-      mustCompleteLessons: false,
-      countJustifiedAbsences: false,
-      checkContract: false,
+    manualEvolution: false,
+    minAttendance: 100,
+    minExamGrade: 0,
+    mustCompleteLessons: false,
+    countJustifiedAbsences: false,
+    checkContract: false,
     checkContractDuration: false,
     contractDurationMonths: undefined,
     contractStatus: [],
@@ -869,7 +915,7 @@ function addConditionNode(position?: { x: number; y: number }) {
     useClassEndDate: false,
     keepSameDayOfWeek: false,
     isBalanced: false,
-    balanceStrategy: ['occupancy'],
+    balanceStrategy: ['occupancy']
   }
 
   const nodePosition = position ?? getViewportCenterPosition({ width: 280, height: 120 })
@@ -883,8 +929,34 @@ function addConditionNode(position?: { x: number; y: number }) {
       onRemove: removeNode,
       nodeId: id,
       showDetails: conditionDetailsOpenId.value === id,
-      onToggleDetails: toggleConditionDetails,
-    },
+      onToggleDetails: toggleConditionDetails
+    }
+  }
+
+  addNodes([newNode])
+
+  selectedNodeId.value = id
+  selectedEdgeId.value = null
+  return id
+}
+
+function addCommentNode(position?: { x: number; y: number }) {
+  const id = commentNodeId(uid())
+  const payload: CommentPayload = {
+    text: ''
+  }
+
+  const nodePosition = position ?? getViewportCenterPosition({ width: 280, height: 170 })
+  const newNode = {
+    id,
+    type: 'comment',
+    position: nodePosition,
+    data: {
+      payload,
+      connectMode: connectMode.value,
+      onRemove: removeNode,
+      nodeId: id
+    }
   }
 
   addNodes([newNode])
@@ -907,24 +979,24 @@ function createConditionFromClass(courseNodeId: string, classId: number) {
   const anchorY = courseNode.position.y + START_Y + classIndex * (ROW_H + ROW_GAP) + ROW_H / 2
   const conditionPos = {
     x: courseNode.position.x + 470,
-    y: anchorY - 60,
+    y: anchorY - 60
   }
 
   const nextConnection: Connection = {
     source: courseNodeId,
     sourceHandle: `class-out:${classId}`,
     target: '',
-    targetHandle: 'if-in',
+    targetHandle: 'if-in'
   }
   const validation = validateConditionConnectionLimits({
     ...nextConnection,
-    target: 'new-condition',
+    target: 'new-condition'
   })
   if (!validation.ok) {
     toast({
       title: 'Conexao nao permitida',
       description: validation.reason,
-      variant: 'destructive',
+      variant: 'destructive'
     })
     return
   }
@@ -945,13 +1017,23 @@ function createConditionFromClass(courseNodeId: string, classId: number) {
       targetHandle: 'if-in',
       type: 'smooth',
       style,
-      data: { kind, auto: true, executionMode, animateIn: true },
-    },
+      data: {
+        ...buildEdgeDataFromConnection(
+          {
+            sourceHandle: `class-out:${classId}`,
+            targetHandle: 'if-in'
+          },
+          executionMode
+        ),
+        auto: true,
+        animateIn: true
+      }
+    }
   ])
   connectMode.value = true
   toast({
     title: 'Condicao criada',
-    description: 'Nova condicao criada e conectada. Agora voce pode ligar para turmas de destino.',
+    description: 'Nova condicao criada e conectada. Agora voce pode ligar para turmas de destino.'
   })
 }
 
@@ -1007,10 +1089,10 @@ function conditionRequiresContract(conditionId: string) {
 
 function enforceContractCheckForConditions() {
   const required = new Set(
-      nodes.value
-          .filter((n) => n.type === 'condition')
-          .filter((n) => conditionRequiresContract(n.id))
-          .map((n) => n.id),
+    nodes.value
+      .filter((n) => n.type === 'condition')
+      .filter((n) => conditionRequiresContract(n.id))
+      .map((n) => n.id)
   )
   if (required.size === 0) return
   let changed = false
@@ -1024,43 +1106,46 @@ function enforceContractCheckForConditions() {
         ...n.data,
         payload: {
           ...n.data?.payload,
-          checkContract: true,
-        },
-      },
+          checkContract: true
+        }
+      }
     }
   })
   if (changed) setNodes(nextNodes)
 }
 
 function exportJson() {
-  const data = {
-    nodes: nodes.value.map((n) => ({
-      nodeKey: n.id,
-      type: n.type,
-      x: Math.round(n.position.x),
-      y: Math.round(n.position.y),
-      payload: n.data?.payload,
-    })),
-    edges: edges.value.map((e) => ({
-      id: e.id,
-      source: e.source,
-      target: e.target,
-      sourceHandle: e.sourceHandle,
-      targetHandle: e.targetHandle,
-      data: e.data,
-    })),
+  try {
+    const canonicalGraph = buildWorkflowPayload({ nodes: nodes.value, edges: edges.value })
+    const issues = validateWorkflowPayload(canonicalGraph)
+    if (issues.length > 0) throw new WorkflowPayloadError(issues)
+    const data = {
+      name: activeWorkflow.value?.name || '',
+      description: activeWorkflow.value?.description || '',
+      status: activeWorkflow.value?.status || 'draft',
+      nodes: canonicalGraph.nodes,
+      edges: canonicalGraph.edges
+    }
+    alert('Export gerado. Veja o console.')
+    console.log('WORKFLOW_JSON', data)
+  } catch (e) {
+    const description =
+      e instanceof WorkflowPayloadError ? formatWorkflowPayloadIssues(e) : formatApiError(e)
+    toast({
+      title: 'Nao foi possivel exportar',
+      description,
+      variant: 'destructive'
+    })
   }
-  alert('Export gerado. Veja o console.')
-  console.log('WORKFLOW_JSON', data)
 }
 
 function onDragStartCourse(event: DragEvent, courseId: number) {
   if (!event.dataTransfer) return
-  event.dataTransfer.setData('application/vueflow', JSON.stringify({type: 'course', courseId: Number(courseId)}))
+  event.dataTransfer.setData('application/vueflow', JSON.stringify({ type: 'course', courseId: Number(courseId) }))
   event.dataTransfer.effectAllowed = 'move'
 }
 
-function onDragStartPaletteNode(event: DragEvent, type: 'start' | 'condition') {
+function onDragStartPaletteNode(event: DragEvent, type: PaletteNodeType) {
   if (!event.dataTransfer) return
   event.dataTransfer.setData('application/vueflow', JSON.stringify({ type }))
   event.dataTransfer.effectAllowed = 'move'
@@ -1083,7 +1168,7 @@ function handleDrop(event: DragEvent) {
 
   const position = project({
     x: event.clientX - bounds.left,
-    y: event.clientY - bounds.top,
+    y: event.clientY - bounds.top
   })
 
   if (payload.type === 'course') {
@@ -1091,7 +1176,7 @@ function handleDrop(event: DragEvent) {
     if (!Number.isFinite(courseId)) return
     const x = Math.max(0, position.x - 160)
     const y = Math.max(0, position.y - 40)
-    addCourseNode(courseId, {x, y})
+    addCourseNode(courseId, { x, y })
     return
   }
 
@@ -1106,6 +1191,13 @@ function handleDrop(event: DragEvent) {
     const x = Math.max(0, position.x - 140)
     const y = Math.max(0, position.y - 60)
     addConditionNode({ x, y })
+    return
+  }
+
+  if (payload.type === 'comment') {
+    const x = Math.max(0, position.x - 140)
+    const y = Math.max(0, position.y - 85)
+    addCommentNode({ x, y })
   }
 }
 
@@ -1114,14 +1206,13 @@ function handleDragOver(event: DragEvent) {
   if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
 }
 
-
 function createWorkflow() {
   const name = newWorkflow.value.name.trim()
   if (!name) {
     toast({
       title: 'Informe um nome',
       description: 'O nome do workflow e obrigatorio para criar.',
-      variant: 'destructive',
+      variant: 'destructive'
     })
     return
   }
@@ -1129,7 +1220,7 @@ function createWorkflow() {
   activeWorkflow.value = {
     name,
     description: newWorkflow.value.description.trim(),
-    status: newWorkflow.value.status || 'active',
+    status: newWorkflow.value.status || 'active'
   }
   setNodes([])
   setEdges([])
@@ -1138,7 +1229,7 @@ function createWorkflow() {
   conditionDetailsOpenId.value = null
   workflowMode.value = 'editor'
   mainTab.value = 'workflow'
-  newWorkflow.value = {name: '', description: '', status: 'active'}
+  newWorkflow.value = { name: '', description: '', status: 'active' }
   createWorkflowOpen.value = false
 }
 
@@ -1155,11 +1246,11 @@ async function deleteWorkflow(wf: any) {
   try {
     const res = await api.deleteWorkflow(String(wf.id))
     apiWorkflows.value = apiWorkflows.value.filter((w) => String(w.id) !== String(wf.id))
-      if (activeWorkflow.value && String(activeWorkflow.value.id) === String(wf.id)) {
-        activeWorkflow.value = null
-        activeWorkflowGraphId.value = null
-        setNodes([])
-        setEdges([])
+    if (activeWorkflow.value && String(activeWorkflow.value.id) === String(wf.id)) {
+      activeWorkflow.value = null
+      activeWorkflowGraphId.value = null
+      setNodes([])
+      setEdges([])
       selectedNodeId.value = null
       selectedEdgeId.value = null
       conditionDetailsOpenId.value = null
@@ -1169,15 +1260,15 @@ async function deleteWorkflow(wf: any) {
     toast({
       title: res?.isFallback ? 'Workflow removido (simulado)' : 'Workflow removido',
       description: res?.isFallback
-          ? 'A API esta offline. A remocao foi aplicada apenas localmente.'
-          : 'Workflow removido com sucesso.',
+        ? 'A API esta offline. A remocao foi aplicada apenas localmente.'
+        : 'Workflow removido com sucesso.'
     })
   } catch (e) {
     console.error('Erro ao remover workflow', e)
     toast({
       title: 'Erro ao remover',
       description: formatApiError(e),
-      variant: 'destructive',
+      variant: 'destructive'
     })
   }
 }
@@ -1185,12 +1276,12 @@ async function deleteWorkflow(wf: any) {
 function workflowStatusMeta(status?: string) {
   const value = String(status || '').toLowerCase()
   if (value === 'active') {
-    return {label: 'Ativo', class: 'bg-emerald-50 border-emerald-200 text-emerald-700'}
+    return { label: 'Ativo', class: 'bg-emerald-50 border-emerald-200 text-emerald-700' }
   }
   if (value === 'inactive') {
-    return {label: 'Inativo', class: 'bg-slate-100 border-slate-200 text-slate-600'}
+    return { label: 'Inativo', class: 'bg-slate-100 border-slate-200 text-slate-600' }
   }
-  return {label: 'Rascunho', class: 'bg-amber-50 border-amber-200 text-amber-700'}
+  return { label: 'Rascunho', class: 'bg-amber-50 border-amber-200 text-amber-700' }
 }
 
 async function saveEditWorkflow() {
@@ -1202,7 +1293,7 @@ async function saveEditWorkflow() {
       ...current,
       name: editWorkflow.value.name.trim(),
       description: editWorkflow.value.description.trim(),
-      status: editWorkflow.value.status || 'active',
+      status: editWorkflow.value.status || 'active'
     }
     const res = await api.updateWorkflow(String(current.id), payload)
     const [wfRes, scheduleRes] = await Promise.all([api.getWorkflows(), api.getWorkflowSchedules()])
@@ -1213,22 +1304,22 @@ async function saveEditWorkflow() {
         ...activeWorkflow.value,
         name: payload.name,
         description: payload.description,
-        status: payload.status,
+        status: payload.status
       }
     }
     editWorkflowOpen.value = false
     toast({
       title: res?.isFallback ? 'Workflow Simulado' : 'Workflow Atualizado',
       description: res?.isFallback
-          ? 'A API esta offline. As alteracoes foram aplicadas localmente para demonstracao.'
-          : 'Workflow atualizado com sucesso.',
+        ? 'A API esta offline. As alteracoes foram aplicadas localmente para demonstracao.'
+        : 'Workflow atualizado com sucesso.'
     })
   } catch (e) {
     console.error('Erro ao atualizar workflow', e)
     toast({
       title: 'Erro ao atualizar',
       description: formatApiError(e),
-      variant: 'destructive',
+      variant: 'destructive'
     })
   }
 }
@@ -1236,12 +1327,15 @@ async function saveEditWorkflow() {
 async function persistWorkflow(status: 'active' | 'draft') {
   if (!activeWorkflow.value) return
   try {
+    const canonicalGraph = buildWorkflowPayload({ nodes: nodes.value, edges: edges.value })
+    const issues = validateWorkflowPayload(canonicalGraph)
+    if (issues.length > 0) throw new WorkflowPayloadError(issues)
     const payload = {
       name: activeWorkflow.value.name,
       description: activeWorkflow.value.description,
       status,
-      nodes: nodes.value,
-      edges: edges.value,
+      nodes: canonicalGraph.nodes,
+      edges: canonicalGraph.edges
     }
 
     let res: any
@@ -1250,7 +1344,7 @@ async function persistWorkflow(status: 'active' | 'draft') {
     } else {
       res = await api.saveWorkflow({
         id: `workflow-${Date.now()}`,
-        ...payload,
+        ...payload
       })
     }
 
@@ -1265,19 +1359,19 @@ async function persistWorkflow(status: 'active' | 'draft') {
 
     toast({
       title: res?.isFallback ? 'Workflow Simulado' : status === 'draft' ? 'Rascunho salvo' : 'Workflow Publicado',
-      description:
-        res?.isFallback
-          ? 'A API esta offline. O workflow foi processado localmente para demonstracao.'
-          : status === 'draft'
-            ? 'Workflow salvo como rascunho. Ele nao sera executado.'
-            : 'Workflow publicado com sucesso.',
+      description: res?.isFallback
+        ? 'A API esta offline. O workflow foi processado localmente para demonstracao.'
+        : status === 'draft'
+          ? 'Workflow salvo como rascunho. Ele nao sera executado.'
+          : 'Workflow publicado com sucesso.'
     })
   } catch (e) {
     console.error('Erro ao salvar workflow', e)
+    const description = e instanceof WorkflowPayloadError ? formatWorkflowPayloadIssues(e) : formatApiError(e)
     toast({
       title: 'Erro ao salvar',
-      description: formatApiError(e),
-      variant: 'destructive',
+      description,
+      variant: 'destructive'
     })
   }
 }
@@ -1291,7 +1385,7 @@ async function saveWorkflowDraft() {
 }
 
 function isValidConnection(connection: Connection) {
-  const {target, sourceHandle, targetHandle} = connection
+  const { target, sourceHandle, targetHandle } = connection
   if (!sourceHandle || !targetHandle) return false
 
   if (sourceHandle === 'start-out') {
@@ -1332,16 +1426,12 @@ function validateConditionConnectionLimits(params: Connection) {
 
   if (sourceHandle.startsWith('class-out') && targetHandle === 'if-in') {
     const alreadyLinkedToCondition = edges.value.some(
-      (e) =>
-        e.source === source &&
-        e.sourceHandle === sourceHandle &&
-        e.targetHandle === 'if-in' &&
-        e.target !== target,
+      (e) => e.source === source && e.sourceHandle === sourceHandle && e.targetHandle === 'if-in' && e.target !== target
     )
     if (alreadyLinkedToCondition) {
       return {
         ok: false,
-        reason: 'Esta turma ja possui condicao de saida. Permitido apenas 1 vinculo de saida para condicao.',
+        reason: 'Esta turma ja possui condicao de saida. Permitido apenas 1 vinculo de saida para condicao.'
       }
     }
   }
@@ -1353,12 +1443,12 @@ function validateConditionConnectionLimits(params: Connection) {
         e.source === source &&
         e.sourceHandle === oppositeHandle &&
         e.target === target &&
-        e.targetHandle === targetHandle,
+        e.targetHandle === targetHandle
     )
     if (hasOppositeToSameClass) {
       return {
         ok: false,
-        reason: 'Nao e permitido ligar OK e NOK na mesma turma de destino.',
+        reason: 'Nao e permitido ligar OK e NOK na mesma turma de destino.'
       }
     }
   }
@@ -1372,10 +1462,10 @@ function edgeStyle(kind: string, executionMode?: string) {
     strokeWidth: 3,
     strokeLinecap: 'round',
     strokeLinejoin: 'round',
-    opacity: 0.92,
+    opacity: 0.92
   }
   if (executionMode === 'recurring') {
-    return {...base, strokeDasharray: '6 6', strokeDashoffset: '0'}
+    return { ...base, strokeDasharray: '6 6', strokeDashoffset: '0' }
   }
   return base
 }
@@ -1389,14 +1479,14 @@ function getStartExecutionMode() {
 function syncEdgesForStart() {
   const mode = getStartExecutionMode()
   setEdges(
-      edges.value.map((e) => {
-        const kind = e.data?.kind || edgeKindFromHandles(e.sourceHandle || '', e.targetHandle || '')
-        return {
-          ...e,
-          data: {...e.data, executionMode: mode},
-          style: edgeStyle(kind, mode),
-        }
-      }),
+    edges.value.map((e) => {
+      const kind = e.data?.kind || edgeKindFromHandles(e.sourceHandle || '', e.targetHandle || '')
+      return {
+        ...e,
+        data: { ...e.data, ...buildEdgeDataFromConnection(e, mode) },
+        style: edgeStyle(kind, mode)
+      }
+    })
   )
   enforceContractCheckForConditions()
 }
@@ -1404,12 +1494,12 @@ function syncEdgesForStart() {
 function handleConnect(params: Connection) {
   if (!connectMode.value) return
 
-  const {source, target, sourceHandle, targetHandle} = params
+  const { source, target, sourceHandle, targetHandle } = params
   if (!source || !target || !sourceHandle || !targetHandle) {
     toast({
       title: 'Conexao invalida',
       description: 'Nao foi possivel identificar origem e destino da conexao.',
-      variant: 'destructive',
+      variant: 'destructive'
     })
     return
   }
@@ -1418,7 +1508,7 @@ function handleConnect(params: Connection) {
     toast({
       title: 'Conexao nao permitida',
       description: 'Conexao deve iniciar por uma saida do no.',
-      variant: 'destructive',
+      variant: 'destructive'
     })
     return
   }
@@ -1426,7 +1516,7 @@ function handleConnect(params: Connection) {
     toast({
       title: 'Conexao nao permitida',
       description: 'Conexao deve terminar em uma entrada do no.',
-      variant: 'destructive',
+      variant: 'destructive'
     })
     return
   }
@@ -1434,7 +1524,7 @@ function handleConnect(params: Connection) {
     toast({
       title: 'Conexao nao permitida',
       description: 'Este tipo de ligacao nao e permitido no workflow.',
-      variant: 'destructive',
+      variant: 'destructive'
     })
     return
   }
@@ -1443,7 +1533,7 @@ function handleConnect(params: Connection) {
     toast({
       title: 'Conexao nao permitida',
       description: validated.reason,
-      variant: 'destructive',
+      variant: 'destructive'
     })
     return
   }
@@ -1460,18 +1550,16 @@ function handleConnect(params: Connection) {
       id,
       type: 'smooth',
       style,
-      data: {kind, auto: false, executionMode, animateIn: true},
-    },
+      data: {
+        ...buildEdgeDataFromConnection(params, executionMode),
+        auto: false,
+        animateIn: true
+      }
+    }
   ]
 
   setEdges(nextEdges)
   selectedEdgeId.value = null
-}
-
-function clampAttendance(value: unknown) {
-  const n = Number(value)
-  if (!Number.isFinite(n)) return 1
-  return Math.min(100, Math.max(1, n))
 }
 
 function updateSelectedCondition(patch: Partial<ConditionPayload>) {
@@ -1486,7 +1574,7 @@ function updateSelectedCondition(patch: Partial<ConditionPayload>) {
         useClassEndDate: false,
         startDate: '',
         endDate: '',
-        evolveAt: patch.evolveAt ?? selectedNode.value.data?.payload?.evolveAt ?? '',
+        evolveAt: patch.evolveAt ?? selectedNode.value.data?.payload?.evolveAt ?? ''
       }
     } else if (mode === 'range') {
       patch = {
@@ -1494,41 +1582,62 @@ function updateSelectedCondition(patch: Partial<ConditionPayload>) {
         useClassEndDate: false,
         evolveAt: '',
         startDate: patch.startDate ?? selectedNode.value.data?.payload?.startDate ?? '',
-        endDate: patch.endDate ?? selectedNode.value.data?.payload?.endDate ?? '',
+        endDate: patch.endDate ?? selectedNode.value.data?.payload?.endDate ?? ''
       }
     } else if (mode === 'classEnd') {
       patch = { ...patch, useClassEndDate: true, evolveAt: '', startDate: '', endDate: '' }
     }
   }
   setNodes(
-      nodes.value.map((n) =>
-          n.id !== selectedNode.value?.id
-              ? n
-              : {
-                ...n,
-                data: {
-                  ...n.data,
-                  payload: {...n.data?.payload, ...patch},
-                },
-              },
-      ),
+    nodes.value.map((n) =>
+      n.id !== selectedNode.value?.id
+        ? n
+        : {
+            ...n,
+            data: {
+              ...n.data,
+              payload: { ...n.data?.payload, ...patch }
+            }
+          }
+    )
+  )
+}
+
+function updateSelectedComment(patch: Partial<CommentPayload>) {
+  if (!selectedNode.value || selectedNode.value.type !== 'comment') return
+  setNodes(
+    nodes.value.map((n) =>
+      n.id !== selectedNode.value?.id
+        ? n
+        : {
+            ...n,
+            data: {
+              ...n.data,
+              payload: {
+                ...n.data?.payload,
+                ...patch,
+                text: String(patch.text ?? n.data?.payload?.text ?? '')
+              }
+            }
+          }
+    )
   )
 }
 
 function updateSelectedStart(patch: Partial<StartPayload>) {
   if (!selectedNode.value || selectedNode.value.type !== 'start') return
   setNodes(
-      nodes.value.map((n) =>
-          n.id !== selectedNode.value?.id
-              ? n
-              : {
-                ...n,
-                data: {
-                  ...n.data,
-                  payload: {...n.data?.payload, ...patch},
-                },
-              },
-      ),
+    nodes.value.map((n) =>
+      n.id !== selectedNode.value?.id
+        ? n
+        : {
+            ...n,
+            data: {
+              ...n.data,
+              payload: { ...n.data?.payload, ...patch }
+            }
+          }
+    )
   )
   if (patch.executionMode) {
     syncEdgesForStart()
@@ -1550,13 +1659,16 @@ function updateSelectedStart(patch: Partial<StartPayload>) {
         </div>
         <div v-else class="text-sm font-semibold text-slate-900">Workflows</div>
         <div class="flex items-center gap-2">
-          <div v-if="mainTab === 'workflow' && workflowMode === 'editor' && activeWorkflow"
-               class="text-xs text-slate-500">{{ activeWorkflow.name }}
+          <div
+            v-if="mainTab === 'workflow' && workflowMode === 'editor' && activeWorkflow"
+            class="text-xs text-slate-500"
+          >
+            {{ activeWorkflow.name }}
           </div>
           <div v-if="mainTab === 'workflow' && workflowMode === 'editor'" class="flex items-center gap-2">
             <Button size="sm" variant="outline" @click="backToList">Voltar</Button>
             <Button size="sm" variant="secondary" class="gap-1.5" @click="saveWorkflowDraft">
-              <Save class="h-4 w-4"/>
+              <Save class="h-4 w-4" />
               Salvar rascunho
             </Button>
             <Button size="sm" class="bg-blue-600 hover:bg-blue-700" @click="publishWorkflow">Publicar</Button>
@@ -1565,13 +1677,13 @@ function updateSelectedStart(patch: Partial<StartPayload>) {
       </div>
     </div>
 
-    <div class="flex-1 min-h-0 overflow-hidden">
+    <div class="min-h-0 flex-1 overflow-hidden">
       <div v-if="mainTab === 'evolution'" class="relative h-full w-full">
         <WorkflowGridPreview
-            v-if="activeWorkflow && nodes.length > 0"
-            :nodes="nodes"
-            :edges="edges"
-            :workflow-id="activeWorkflow.id ?? ''"
+          v-if="activeWorkflow && nodes.length > 0"
+          :nodes="nodes"
+          :edges="edges"
+          :workflow-id="activeWorkflow.id ?? ''"
         />
         <div v-else class="flex h-full items-center justify-center text-sm text-slate-500">
           Selecione um workflow para ver a evolucao dos jovens.
@@ -1579,7 +1691,6 @@ function updateSelectedStart(patch: Partial<StartPayload>) {
       </div>
 
       <div v-else class="h-full min-h-0">
-
         <div v-if="workflowMode === 'list'" class="h-full overflow-auto">
           <div class="mx-auto flex h-full w-full max-w-5xl flex-col gap-6 p-6">
             <div class="flex items-center justify-between">
@@ -1599,27 +1710,32 @@ function updateSelectedStart(patch: Partial<StartPayload>) {
                   <div class="grid gap-3 py-2">
                     <div class="grid gap-1">
                       <Label class="text-xs">Nome</Label>
-                      <Input v-model="newWorkflow.name" placeholder="Nome do workflow" class="h-9"/>
+                      <Input v-model="newWorkflow.name" placeholder="Nome do workflow" class="h-9" />
                     </div>
                     <div class="grid gap-1">
                       <Label class="text-xs">Descricao</Label>
-                      <Textarea v-model="newWorkflow.description" class="min-h-[90px]"
-                                placeholder="Descreva o objetivo do workflow"/>
+                      <Textarea
+                        v-model="newWorkflow.description"
+                        class="min-h-[90px]"
+                        placeholder="Descreva o objetivo do workflow"
+                      />
                     </div>
                     <div class="grid gap-1">
                       <Label class="text-xs">Status</Label>
-                      <select v-model="newWorkflow.status"
-                              class="h-9 w-full rounded-md border border-slate-200 bg-white px-2 text-xs">
-                        <option v-for="opt in workflowStatusOptions" :key="opt.value" :value="opt.value">{{
-                            opt.label
-                          }}
+                      <select
+                        v-model="newWorkflow.status"
+                        class="h-9 w-full rounded-md border border-slate-200 bg-white px-2 text-xs"
+                      >
+                        <option v-for="opt in workflowStatusOptions" :key="opt.value" :value="opt.value">
+                          {{ opt.label }}
                         </option>
                       </select>
                     </div>
                   </div>
                   <DialogFooter>
                     <Button size="sm" variant="outline" @click="createWorkflowOpen = false">Cancelar</Button>
-                    <Button size="sm" class="bg-blue-600 hover:bg-blue-700" @click="createWorkflow">Criar Workflow
+                    <Button size="sm" class="bg-blue-600 hover:bg-blue-700" @click="createWorkflow"
+                      >Criar Workflow
                     </Button>
                   </DialogFooter>
                 </DialogContent>
@@ -1627,32 +1743,35 @@ function updateSelectedStart(patch: Partial<StartPayload>) {
             </div>
 
             <div class="rounded-2xl border bg-white p-5 shadow-sm">
-              <div class="flex items-center justify-between gap-3 mb-3">
+              <div class="mb-3 flex items-center justify-between gap-3">
                 <div class="text-sm font-semibold text-slate-900">Lista de Workflows</div>
-                <Input v-model="workflowSearch" placeholder="Buscar workflow..." class="h-8 w-full max-w-[260px]"/>
+                <Input v-model="workflowSearch" placeholder="Buscar workflow..." class="h-8 w-full max-w-[260px]" />
               </div>
               <div v-if="apiWorkflows.length === 0" class="rounded-xl border border-dashed bg-slate-50 p-6 text-center">
-                <div class="text-sm font-semibold text-slate-600 mb-1">Nenhum workflow</div>
+                <div class="mb-1 text-sm font-semibold text-slate-600">Nenhum workflow</div>
                 <div class="text-xs text-muted-foreground">Crie um workflow para comecar</div>
               </div>
-              <div v-else-if="filteredWorkflows.length === 0"
-                   class="rounded-xl border border-dashed bg-slate-50 p-6 text-center">
-                <div class="text-sm font-semibold text-slate-600 mb-1">Sem resultados</div>
+              <div
+                v-else-if="filteredWorkflows.length === 0"
+                class="rounded-xl border border-dashed bg-slate-50 p-6 text-center"
+              >
+                <div class="mb-1 text-sm font-semibold text-slate-600">Sem resultados</div>
                 <div class="text-xs text-muted-foreground">Ajuste a busca para encontrar workflows</div>
               </div>
               <div v-else class="space-y-2">
-                <div v-for="wf in filteredWorkflows" :key="wf.id"
-                     class="group flex items-center justify-between rounded-xl border bg-white p-3 shadow-sm transition-all hover:border-blue-200 hover:shadow-md"
+                <div
+                  v-for="wf in filteredWorkflows"
+                  :key="wf.id"
+                  class="group flex items-center justify-between rounded-xl border bg-white p-3 shadow-sm transition-all hover:border-blue-200 hover:shadow-md"
                 >
                   <button
-                      type="button"
-                      class="min-w-0 flex-1 cursor-pointer self-stretch flex flex-col justify-center text-left"
-                      @click="loadWorkflow(wf)"
+                    type="button"
+                    class="flex min-w-0 flex-1 cursor-pointer flex-col justify-center self-stretch text-left"
+                    @click="loadWorkflow(wf)"
                   >
-                    <div class="text-sm font-bold truncate text-slate-900 mb-0.5">{{ wf.name }}</div>
-                    <div class="text-[10px] text-muted-foreground line-clamp-2">{{
-                        wf.description || 'Sem descricao'
-                      }}
+                    <div class="mb-0.5 truncate text-sm font-bold text-slate-900">{{ wf.name }}</div>
+                    <div class="line-clamp-2 text-[10px] text-muted-foreground">
+                      {{ wf.description || 'Sem descricao' }}
                     </div>
                     <div class="mt-1 grid gap-0.5 text-[10px] text-slate-600">
                       <div class="flex items-center gap-1">
@@ -1668,7 +1787,7 @@ function updateSelectedStart(patch: Partial<StartPayload>) {
                         <span>{{ scheduleFrequencyLabel(workflowScheduleOf(wf)) }}</span>
                       </div>
                     </div>
-                    <div class="text-[10px] text-muted-foreground flex items-center gap-2">
+                    <div class="flex items-center gap-2 text-[10px] text-muted-foreground">
                       <span>ID: {{ wf.id }}</span>
                       <span>-</span>
                       <span>{{ wf.nodes?.length || 0 }} nos</span>
@@ -1676,40 +1795,40 @@ function updateSelectedStart(patch: Partial<StartPayload>) {
                   </button>
                   <div class="flex items-center gap-2">
                     <span
-                        class="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold"
-                        :class="workflowStatusMeta(wf.status).class"
+                      class="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold"
+                      :class="workflowStatusMeta(wf.status).class"
                     >
                       {{ workflowStatusMeta(wf.status).label }}
                     </span>
                     <Button
-                        size="icon"
-                        variant="ghost"
-                        class="h-8 w-8 text-blue-600 hover:text-blue-700"
-                        title="Ver evolucao dos jovens"
-                        @pointerdown.stop
-                        @click.stop="openEvolutionWorkflow(wf)"
+                      size="icon"
+                      variant="ghost"
+                      class="h-8 w-8 text-blue-600 hover:text-blue-700"
+                      title="Ver evolucao dos jovens"
+                      @pointerdown.stop
+                      @click.stop="openEvolutionWorkflow(wf)"
                     >
-                      <Users class="h-4 w-4"/>
+                      <Users class="h-4 w-4" />
                     </Button>
                     <Button
-                        size="icon"
-                        variant="ghost"
-                        class="h-8 w-8"
-                        title="Editar workflow"
-                        @pointerdown.stop
-                        @click.stop="openEditWorkflow(wf)"
+                      size="icon"
+                      variant="ghost"
+                      class="h-8 w-8"
+                      title="Editar workflow"
+                      @pointerdown.stop
+                      @click.stop="openEditWorkflow(wf)"
                     >
-                      <Pencil class="h-4 w-4"/>
+                      <Pencil class="h-4 w-4" />
                     </Button>
                     <Button
-                        size="icon"
-                        variant="ghost"
-                        class="h-8 w-8 text-rose-600 hover:text-rose-700"
-                        title="Excluir workflow"
-                        @pointerdown.stop
-                        @click.stop="deleteWorkflow(wf)"
+                      size="icon"
+                      variant="ghost"
+                      class="h-8 w-8 text-rose-600 hover:text-rose-700"
+                      title="Excluir workflow"
+                      @pointerdown.stop
+                      @click.stop="deleteWorkflow(wf)"
                     >
-                      <Trash2 class="h-4 w-4"/>
+                      <Trash2 class="h-4 w-4" />
                     </Button>
                   </div>
                 </div>
@@ -1725,20 +1844,24 @@ function updateSelectedStart(patch: Partial<StartPayload>) {
                 <div v-if="editWorkflow" class="grid gap-3 py-2">
                   <div class="grid gap-1">
                     <Label class="text-xs">Nome</Label>
-                    <Input v-model="editWorkflow.name" placeholder="Nome do workflow" class="h-9"/>
+                    <Input v-model="editWorkflow.name" placeholder="Nome do workflow" class="h-9" />
                   </div>
                   <div class="grid gap-1">
                     <Label class="text-xs">Descricao</Label>
-                    <Textarea v-model="editWorkflow.description" class="min-h-[90px]"
-                              placeholder="Descreva o objetivo do workflow"/>
+                    <Textarea
+                      v-model="editWorkflow.description"
+                      class="min-h-[90px]"
+                      placeholder="Descreva o objetivo do workflow"
+                    />
                   </div>
                   <div class="grid gap-1">
                     <Label class="text-xs">Status</Label>
-                    <select v-model="editWorkflow.status"
-                            class="h-9 w-full rounded-md border border-slate-200 bg-white px-2 text-xs">
-                      <option v-for="opt in workflowStatusOptions" :key="opt.value" :value="opt.value">{{
-                          opt.label
-                        }}
+                    <select
+                      v-model="editWorkflow.status"
+                      class="h-9 w-full rounded-md border border-slate-200 bg-white px-2 text-xs"
+                    >
+                      <option v-for="opt in workflowStatusOptions" :key="opt.value" :value="opt.value">
+                        {{ opt.label }}
                       </option>
                     </select>
                   </div>
@@ -1751,361 +1874,411 @@ function updateSelectedStart(patch: Partial<StartPayload>) {
             </Dialog>
           </div>
         </div>
-        <div
-            v-else
-            class="grid h-full min-h-0 gap-0 border rounded-2xl overflow-hidden"
-            :class="editorGridClass"
-        >
-          <div class="h-full bg-muted/30 border-r min-h-0 overflow-hidden">
+        <div v-else class="grid h-full min-h-0 gap-0 overflow-hidden rounded-2xl border" :class="editorGridClass">
+          <div class="h-full min-h-0 overflow-hidden border-r bg-muted/30">
             <template v-if="!leftPanelCollapsed">
-
-            <ScrollArea class="h-full w-full">
-              <div class="p-4">
-                <div class="mb-3 flex items-center justify-between">
-                  <div class="text-sm font-semibold">Cursos</div>
-                  <div class="flex items-center gap-2">
-                    <div
+              <ScrollArea class="h-full w-full">
+                <div class="p-4">
+                  <div class="mb-3 flex items-center justify-between">
+                    <div class="text-sm font-semibold">Cursos</div>
+                    <div class="flex items-center gap-2">
+                      <div
                         class="h-2 w-2 rounded-full"
                         :class="apiOnline ? 'bg-emerald-500' : 'bg-orange-500'"
                         :title="apiOnline ? 'API Online' : 'API Offline (Demo Mode)'"
-                    ></div>
-                    <span
+                      ></div>
+                      <span
                         class="inline-flex items-center rounded-full border border-slate-200 bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-700"
-                    >
-                    vueflow
-                  </span>
-                    <Button
+                      >
+                        vueflow
+                      </span>
+                      <Button
                         size="icon"
                         variant="ghost"
                         class="h-7 w-7"
                         title="Recolher painel de cursos"
                         @click="leftPanelCollapsed = true"
-                    >
-                      <ChevronRight class="h-4 w-4 rotate-180"/>
-                    </Button>
+                      >
+                        <ChevronRight class="h-4 w-4 rotate-180" />
+                      </Button>
+                    </div>
                   </div>
-                </div>
 
-                <div class="space-y-2">
-                  <Input v-model="query" placeholder="Buscar..."/>
-                  <select
+                  <div class="space-y-2">
+                    <Input v-model="query" placeholder="Buscar..." />
+                    <select
                       v-model="courseApprenticeFilter"
                       class="h-9 w-full rounded-md border border-slate-200 bg-white px-2 text-xs"
-                  >
-                    <option value="all">Todos os cursos</option>
-                    <option value="with">Com aprendizes</option>
-                    <option value="without">Sem aprendizes</option>
-                  </select>
-                  <div class="flex gap-2">
-                    <Button
+                    >
+                      <option value="all">Todos os cursos</option>
+                      <option value="with">Com aprendizes</option>
+                      <option value="without">Sem aprendizes</option>
+                    </select>
+                    <div class="grid grid-cols-2 gap-2">
+                      <Button
                         size="sm"
                         variant="secondary"
-                        class="flex-1 cursor-grab active:cursor-grabbing"
+                        class="cursor-grab active:cursor-grabbing"
                         title="Inicio (clique ou arraste)"
                         draggable="true"
                         @click="addStartNode"
-                        @dragstart="(event) => onDragStartPaletteNode(event, 'start')"
-                    >
-                      <Play class="mr-2 h-4 w-4"/>
-                      Inicio
-                    </Button>
-                    <Button
+                        @dragstart="(event: DragEvent) => onDragStartPaletteNode(event, 'start')"
+                      >
+                        <Play class="mr-2 h-4 w-4" />
+                        Inicio
+                      </Button>
+                      <Button
                         size="sm"
                         variant="secondary"
-                        class="flex-1 cursor-grab active:cursor-grabbing"
+                        class="cursor-grab active:cursor-grabbing"
                         title="Condicao (clique ou arraste)"
                         draggable="true"
                         @click="addConditionNode"
-                        @dragstart="(event) => onDragStartPaletteNode(event, 'condition')"
-                    >
-                      <Plus class="mr-2 h-4 w-4"/>
-                      Condicao
-                    </Button>
-                    <Button size="sm" variant="secondary" title="Export JSON" @click="exportJson">
-                      <Save class="h-4 w-4"/>
-                    </Button>
+                        @dragstart="(event: DragEvent) => onDragStartPaletteNode(event, 'condition')"
+                      >
+                        <Plus class="mr-2 h-4 w-4" />
+                        Condicao
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        class="cursor-grab active:cursor-grabbing"
+                        title="Comentário (clique ou arraste)"
+                        draggable="true"
+                        @click="addCommentNode"
+                        @dragstart="(event: DragEvent) => onDragStartPaletteNode(event, 'comment')"
+                      >
+                        <FileText class="mr-2 h-4 w-4" />
+                        Comentário
+                      </Button>
+                      <Button size="sm" variant="secondary" title="Export JSON" @click="exportJson">
+                        <Save class="mr-2 h-4 w-4" />
+                        Exportar
+                      </Button>
+                    </div>
                   </div>
-                </div>
 
-                <div class="my-4 h-px w-full bg-border"/>
+                  <div class="my-4 h-px w-full bg-border" />
 
-                <div class="flex items-center justify-between">
-                  <div class="flex items-center gap-2">
-                    <Switch
+                  <div class="flex items-center justify-between">
+                    <div class="flex items-center gap-2">
+                      <Switch
                         :checked="connectMode"
-                        @update:checked="(value) => {
-                      connectMode = value
-                      selectedEdgeId = null
-                    }"
-                    />
-                    <Label class="text-xs">Modo conectar</Label>
+                        @update:checked="
+                          (value) => {
+                            connectMode = value
+                            selectedEdgeId = null
+                          }
+                        "
+                      />
+                      <Label class="text-xs">Modo conectar</Label>
+                    </div>
+                    <Button size="sm" variant="ghost" title="Limpar conexoes" @click="clearConnections">
+                      <Unlink class="h-4 w-4" />
+                    </Button>
                   </div>
-                  <Button size="sm" variant="ghost" title="Limpar conexoes" @click="clearConnections">
-                    <Unlink class="h-4 w-4"/>
-                  </Button>
-                </div>
 
-                <div class="mt-2 space-y-2 text-xs text-muted-foreground">
-                  <div class="flex items-center gap-2">
-                    <Link2 class="h-3 w-3"/>
-                    <span>
-                    {{
-                        connectMode
+                  <div class="mt-2 space-y-2 text-xs text-muted-foreground">
+                    <div class="flex items-center gap-2">
+                      <Link2 class="h-3 w-3" />
+                      <span>
+                        {{
+                          connectMode
                             ? 'Conecte Turmas apenas em Condições, e Condições apenas em Turmas.'
                             : 'Ative o modo conectar para criar conexoes.'
-                      }}
-                  </span>
+                        }}
+                      </span>
+                    </div>
+                    <div v-if="connectMode" class="text-[11px] text-muted-foreground">
+                      IF tem duas saidas: OK (verde) e NOK (vermelha).
+                    </div>
                   </div>
-                  <div v-if="connectMode" class="text-[11px] text-muted-foreground">
-                    IF tem duas saidas: OK (verde) e NOK (vermelha).
-                  </div>
-                </div>
 
-                <div class="my-4 h-px w-full bg-border"/>
+                  <div class="my-4 h-px w-full bg-border" />
 
-                <div class="space-y-2">
-                  <div
+                  <div class="space-y-2">
+                    <div
                       v-if="courses.length === 0"
                       class="rounded-xl border border-dashed bg-slate-50 p-3 text-center text-xs text-muted-foreground"
-                  >
-                    Nenhum curso encontrado para o filtro selecionado.
-                  </div>
-                  <div
-                      v-for="c in courses"
-                      :key="c.id"
-                      class="rounded-2xl border bg-background shadow-sm overflow-hidden"
-                  >
-                    <div class="relative flex items-start gap-4 px-4 py-3 bg-gray-100"
-                         style="min-height: 67px;">
-                      <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-gray-200 backdrop-blur-sm">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"
-                             stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
-                             class="lucide lucide-graduation-cap-icon h-6 w-6 text-gray-400">
-                          <path d="M22 10v6M2 10l10-5 10 5-10 5z"></path>
-                          <path d="M6 12v5c3 3 9 3 12 0v-5"></path>
-                        </svg>
-                      </div>
-                      <div class="min-w-0 flex-1 pt-0.5">
-                        <div class=" text-[9px] font-semibold uppercase tracking-wide text-gray-500"> Curso</div>
-                        <h3 class="text-[12px] font-semibold leading-tight text-gray-500 line-clamp-2"
-                            title="{{ c.name }}">{{ c.name }}</h3></div>
+                    >
+                      Nenhum curso encontrado para o filtro selecionado.
                     </div>
                     <div
-                        class="flex items-center justify-between border-b border-slate-100 bg-gradient-to-br from-slate-50 to-white px-5 py-3"
-                        style="height: 56px;">
-                      <div class="space-y-1">
-                        <div class="text-[9px] font-medium uppercase tracking-wide text-slate-500"> Total de
-                          Aprendizes
+                      v-for="c in courses"
+                      :key="c.id"
+                      class="overflow-hidden rounded-2xl border bg-background shadow-sm"
+                    >
+                      <div class="relative flex items-start gap-4 bg-gray-100 px-4 py-3" style="min-height: 67px">
+                        <div
+                          class="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-gray-200 backdrop-blur-sm"
+                        >
+                          <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            width="20"
+                            height="20"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            class="lucide lucide-graduation-cap-icon h-6 w-6 text-gray-400"
+                          >
+                            <path d="M22 10v6M2 10l10-5 10 5-10 5z"></path>
+                            <path d="M6 12v5c3 3 9 3 12 0v-5"></path>
+                          </svg>
                         </div>
-                        <div class="flex items-baseline gap-2"><span
-                            class="text-1xl font-bold text-slate-600">{{
-                            courseApprenticesTotal(c.id)
-                          }}</span><span class="text-sm text-slate-500">Aprendizes</span>
+                        <div class="min-w-0 flex-1 pt-0.5">
+                          <div class="text-[9px] font-semibold uppercase tracking-wide text-gray-500">Curso</div>
+                          <h3
+                            class="line-clamp-2 text-[12px] font-semibold leading-tight text-gray-500"
+                            title="{{ c.name }}"
+                          >
+                            {{ c.name }}
+                          </h3>
                         </div>
                       </div>
-                    </div>
-                    <div class="flex items-center justify-between gap-2 p-3">
-                      <button
-                          class="flex items-center gap-2 text-left"
-                          type="button"
-                          @click="toggleExpanded(c.id)"
+                      <div
+                        class="flex items-center justify-between border-b border-slate-100 bg-gradient-to-br from-slate-50 to-white px-5 py-3"
+                        style="height: 56px"
                       >
-                        <component :is="expandedCourses.has(c.id) ? ChevronDown : ChevronRight" class="h-4 w-4"/>
-                        <div>
-                          <div class="flex items-center gap-1.5 text-[12px] text-muted-foreground">
-                            <span>Selecionar turmas</span>
+                        <div class="space-y-1">
+                          <div class="text-[9px] font-medium uppercase tracking-wide text-slate-500">
+                            Total de Aprendizes
+                          </div>
+                          <div class="flex items-baseline gap-2">
+                            <span class="text-1xl font-bold text-slate-600">{{ courseApprenticesTotal(c.id) }}</span
+                            ><span class="text-sm text-slate-500">Aprendizes</span>
                           </div>
                         </div>
-                      </button>
+                      </div>
+                      <div class="flex items-center justify-between gap-2 p-3">
+                        <button class="flex items-center gap-2 text-left" type="button" @click="toggleExpanded(c.id)">
+                          <component :is="expandedCourses.has(c.id) ? ChevronDown : ChevronRight" class="h-4 w-4" />
+                          <div>
+                            <div class="flex items-center gap-1.5 text-[12px] text-muted-foreground">
+                              <span>Selecionar turmas</span>
+                            </div>
+                          </div>
+                        </button>
 
-                      <div class="flex items-center gap-2">
-                      <span
-                          class="inline-flex items-center rounded-full border border-slate-200 bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-700"
-                          title="Turmas selecionadas"
-                      >
-                        {{ preselect[c.id]?.size || 0 }}
-                      </span>
+                        <div class="flex items-center gap-2">
+                          <span
+                            class="inline-flex items-center rounded-full border border-slate-200 bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-700"
+                            title="Turmas selecionadas"
+                          >
+                            {{ preselect[c.id]?.size || 0 }}
+                          </span>
 
-                        <div
+                          <div
                             class="cursor-grab select-none rounded-xl border px-3 py-1 text-xs active:cursor-grabbing"
                             :class="preselect[c.id]?.size ? '' : 'opacity-50'"
                             :draggable="!!preselect[c.id]?.size"
                             :title="preselect[c.id]?.size ? 'Arraste' : 'Selecione pelo menos 1 turma'"
-                            @dragstart="(event) => {
-                          if (!preselect[c.id]?.size) return
-                          onDragStartCourse(event, c.id)
-                        }"
-                        >
-                          Arrastar
-                        </div>
+                            @dragstart="
+                              (event: DragEvent) => {
+                                if (!preselect[c.id]?.size) return
+                                onDragStartCourse(event, c.id)
+                              }
+                            "
+                          >
+                            Arrastar
+                          </div>
 
-                        <Button
+                          <Button
                             size="sm"
                             variant="ghost"
                             :disabled="!preselect[c.id]?.size"
                             :title="preselect[c.id]?.size ? 'Adicionar' : 'Selecione turmas'"
-                            @click="() => {
-                          if (!preselect[c.id]?.size) return
-                          addCourseNode(c.id, { x: 80, y: 80 })
-                        }"
-                        >
-                          <Plus class="h-4 w-4"/>
-                        </Button>
+                            @click="
+                              () => {
+                                if (!preselect[c.id]?.size) return
+                                addCourseNode(c.id, { x: 80, y: 80 })
+                              }
+                            "
+                          >
+                            <Plus class="h-4 w-4" />
+                          </Button>
+                        </div>
                       </div>
-                    </div>
 
-                    <div v-if="expandedCourses.has(c.id)" class="px-3 pb-3">
-                      <div class="mb-2 flex items-center justify-between gap-2">
-                        <div class="text-xs font-semibold">Turmas:</div>
-                        <Button
+                      <div v-if="expandedCourses.has(c.id)" class="px-3 pb-3">
+                        <div class="mb-2 flex items-center justify-between gap-2">
+                          <div class="text-xs font-semibold">Turmas:</div>
+                          <Button
                             size="sm"
                             variant="ghost"
                             class="h-7 px-2 text-[10px]"
-                            :disabled="!(classesByCourse[c.id]?.length) || (preselect[c.id]?.size || 0) === (classesByCourse[c.id] || []).length"
+                            :disabled="
+                              !classesByCourse[c.id]?.length ||
+                              (preselect[c.id]?.size || 0) === (classesByCourse[c.id] || []).length
+                            "
                             @click="selectAllCourseClasses(c.id)"
-                        >
-                          {{
-                            (classesByCourse[c.id]?.length || 0) > 0 &&
-                            (preselect[c.id]?.size || 0) === (classesByCourse[c.id] || []).length
+                          >
+                            {{
+                              (classesByCourse[c.id]?.length || 0) > 0 &&
+                              (preselect[c.id]?.size || 0) === (classesByCourse[c.id] || []).length
                                 ? 'Todas selecionadas'
                                 : 'Selecionar todas'
-                          }}
-                        </Button>
-                      </div>
-                      <div class="space-y-2">
-                        <div
+                            }}
+                          </Button>
+                        </div>
+                        <div class="space-y-2">
+                          <div
                             v-for="cls in classesByCourse[c.id] || []"
                             :key="cls.id"
                             class="flex items-center justify-between gap-2 rounded-xl border bg-slate-50/50 px-3 py-2"
-                        >
-                          <div class="flex items-center gap-2 min-w-0 flex-1">
-                            <input
+                          >
+                            <div class="flex min-w-0 flex-1 items-center gap-2">
+                              <input
                                 type="checkbox"
                                 :checked="preselect[c.id]?.has(cls.id) || false"
-                                @change="(event) => togglePreselect(c.id, cls.id, (event.target as HTMLInputElement).checked)"
+                                @change="
+                                  (event) => togglePreselect(c.id, cls.id, (event.target as HTMLInputElement).checked)
+                                "
                                 class="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                            />
-                            <div class="min-w-0 flex-1">
-                              <div class="text-[13px] font-semibold truncate text-slate-800">{{ cls.name }}</div>
-                              <div class="flex items-center gap-2 text-[10px] text-muted-foreground mt-0.5">
-                              <span class="flex items-center gap-0.5" title="Total de aprendizes">
-                                <Users class="h-3 w-3"/>
-                                {{ cls.stats?.total || 0 }}
-                              </span>
-                                <span v-if="cls.stats" class="flex gap-1.5 border-l pl-2 border-slate-200">
-                                <span title="Homens">H: {{ cls.stats.men }}</span>
-                                <span title="Mulheres">M: {{ cls.stats.women }}</span>
-                                <span title="Outros">O: {{ cls.stats.others }}</span>
-                                  <span
+                              />
+                              <div class="min-w-0 flex-1">
+                                <div class="truncate text-[13px] font-semibold text-slate-800">{{ cls.name }}</div>
+                                <div class="mt-0.5 flex items-center gap-2 text-[10px] text-muted-foreground">
+                                  <span class="flex items-center gap-0.5" title="Total de aprendizes">
+                                    <Users class="h-3 w-3" />
+                                    {{ cls.stats?.total || 0 }}
+                                  </span>
+                                  <span v-if="cls.stats" class="flex gap-1.5 border-l border-slate-200 pl-2">
+                                    <span title="Homens">H: {{ cls.stats.men }}</span>
+                                    <span title="Mulheres">M: {{ cls.stats.women }}</span>
+                                    <span title="Outros">O: {{ cls.stats.others }}</span>
+                                    <span
                                       v-if="cls.dayOfWeek"
-                                      class="whitespace-nowrap rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[7px] text-slate-700 font-medium"
-                                  >
-                              {{ formatDayOfWeek(cls.dayOfWeek) }}
-                            </span>
-                              </span>
+                                      class="whitespace-nowrap rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[7px] font-medium text-slate-700"
+                                    >
+                                      {{ formatDayOfWeek(cls.dayOfWeek) }}
+                                    </span>
+                                  </span>
+                                </div>
                               </div>
                             </div>
-                          </div>
 
-                          <div class="flex gap-2 shrink-0  flex-col items-end ">
-                            <span
+                            <div class="flex shrink-0 flex-col items-end gap-2">
+                              <span
                                 v-if="onlyWithContractFlag(cls)"
-                                class="whitespace-nowrap rounded-full border border-orange-100 bg-orange-50 px-2 py-0.5 text-[7px] text-orange-700 font-medium"
-                            >
-                              Contrato
-                            </span>
-                            <span
+                                class="whitespace-nowrap rounded-full border border-orange-100 bg-orange-50 px-2 py-0.5 text-[7px] font-medium text-orange-700"
+                              >
+                                Contrato
+                              </span>
+                              <span
                                 v-else
-                                class="whitespace-nowrap rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[7px] text-slate-600 font-medium"
-                            >
-                              Livre
-                            </span>
+                                class="whitespace-nowrap rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[7px] font-medium text-slate-600"
+                              >
+                                Livre
+                              </span>
+                            </div>
                           </div>
                         </div>
-                      </div>
-                      <div class="mt-2 text-[11px] text-muted-foreground">
-                        Exemplo: "matriculados do Curso X / Turma X1 -> Curso Y / Turma Y3".
+                        <div class="mt-2 text-[11px] text-muted-foreground">
+                          Exemplo: "matriculados do Curso X / Turma X1 -> Curso Y / Turma Y3".
+                        </div>
                       </div>
                     </div>
                   </div>
                 </div>
-              </div>
-            </ScrollArea>
+              </ScrollArea>
             </template>
             <div v-else class="flex h-full flex-col items-center gap-3 pt-3">
               <Button
-                  size="icon"
-                  variant="ghost"
-                  class="h-8 w-8"
-                  title="Expandir painel de cursos"
-                  @click="leftPanelCollapsed = false"
+                size="icon"
+                variant="ghost"
+                class="h-8 w-8"
+                title="Expandir painel de cursos"
+                @click="leftPanelCollapsed = false"
               >
-                <ChevronRight class="h-4 w-4"/>
+                <ChevronRight class="h-4 w-4" />
               </Button>
               <div class="h-px w-8 bg-border"></div>
               <Button
-                  size="icon"
-                  variant="secondary"
-                  class="h-9 w-9 cursor-grab active:cursor-grabbing"
-                  title="Inicio (clique ou arraste)"
-                  draggable="true"
-                  @click="addStartNode()"
-                  @dragstart="(event) => onDragStartPaletteNode(event, 'start')"
+                size="icon"
+                variant="secondary"
+                class="h-9 w-9 cursor-grab active:cursor-grabbing"
+                title="Inicio (clique ou arraste)"
+                draggable="true"
+                @click="addStartNode()"
+                @dragstart="(event: DragEvent) => onDragStartPaletteNode(event, 'start')"
               >
-                <Play class="h-4 w-4"/>
+                <Play class="h-4 w-4" />
               </Button>
               <Button
-                  size="icon"
-                  variant="secondary"
-                  class="h-9 w-9 cursor-grab active:cursor-grabbing"
-                  title="Condicao (clique ou arraste)"
-                  draggable="true"
-                  @click="addConditionNode()"
-                  @dragstart="(event) => onDragStartPaletteNode(event, 'condition')"
+                size="icon"
+                variant="secondary"
+                class="h-9 w-9 cursor-grab active:cursor-grabbing"
+                title="Condicao (clique ou arraste)"
+                draggable="true"
+                @click="addConditionNode()"
+                @dragstart="(event: DragEvent) => onDragStartPaletteNode(event, 'condition')"
               >
-                <Plus class="h-4 w-4"/>
+                <Plus class="h-4 w-4" />
               </Button>
-              <div class="mt-2 text-[10px] text-muted-foreground [writing-mode:vertical-rl] rotate-180">
-                arraste
-              </div>
+              <Button
+                size="icon"
+                variant="secondary"
+                class="h-9 w-9 cursor-grab active:cursor-grabbing"
+                title="Comentário (clique ou arraste)"
+                draggable="true"
+                @click="addCommentNode()"
+                @dragstart="(event: DragEvent) => onDragStartPaletteNode(event, 'comment')"
+              >
+                <FileText class="h-4 w-4" />
+              </Button>
+              <div class="mt-2 rotate-180 text-[10px] text-muted-foreground [writing-mode:vertical-rl]">arraste</div>
             </div>
           </div>
-
 
           <div class="relative h-full min-h-0" ref="flowWrapper" @drop="handleDrop" @dragover="handleDragOver">
             <div class="relative h-full">
               <VueFlow
-                  :id="flowId"
-                  :nodes="nodes"
-                  :edges="edges"
-                  :node-types="nodeTypes"
-                  :edge-types="edgeTypes"
-                  :min-zoom="0.45"
-                  :max-zoom="2.2"
-                  :default-edge-options="{ type: 'smooth' }"
-                  :is-valid-connection="isValidConnection"
-                  class="h-full w-full bg-[radial-gradient(circle_at_1px_1px,rgba(148,163,184,0.35)_1px,transparent_0)] bg-[length:22px_22px]"
-                  @connect="handleConnect"
+                :id="flowId"
+                :nodes="nodes"
+                :edges="edges"
+                :node-types="nodeTypes"
+                :edge-types="edgeTypes"
+                :min-zoom="0.45"
+                :max-zoom="2.2"
+                :default-edge-options="{ type: 'smooth' }"
+                :is-valid-connection="isValidConnection"
+                class="h-full w-full bg-[radial-gradient(circle_at_1px_1px,rgba(148,163,184,0.35)_1px,transparent_0)] bg-[length:22px_22px]"
+                @connect="handleConnect"
               >
                 <template #connection-line="{ sourceX, sourceY, targetX, targetY }">
-                  <CustomConnectionLine :source-x="sourceX" :source-y="sourceY" :target-x="targetX"
-                                        :target-y="targetY"/>
+                  <CustomConnectionLine
+                    :source-x="sourceX"
+                    :source-y="sourceY"
+                    :target-x="targetX"
+                    :target-y="targetY"
+                  />
                 </template>
-                <Background :gap="22" :size="1"/>
-                <Controls class="z-10 pointer-events-auto" position="top-right" :show-fit-view="true" :show-zoom="true"
-                          :show-interactive="true"/>
+                <Background :gap="22" :size="1" />
+                <Controls
+                  class="pointer-events-auto z-10"
+                  position="top-right"
+                  :show-fit-view="true"
+                  :show-zoom="true"
+                  :show-interactive="true"
+                />
               </VueFlow>
 
-              <div v-if="nodes.length === 0"
-                   class="pointer-events-none absolute inset-0 flex items-center justify-center">
+              <div
+                v-if="nodes.length === 0"
+                class="pointer-events-none absolute inset-0 flex items-center justify-center"
+              >
                 <div
-                    class="pointer-events-auto rounded-3xl border-2 border-dashed border-slate-300 bg-white p-8 shadow-xl">
+                  class="pointer-events-auto rounded-3xl border-2 border-dashed border-slate-300 bg-white p-8 shadow-xl"
+                >
                   <div class="text-center">
                     <div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-100">
-                      <Plus class="h-6 w-6 text-blue-600"/>
+                      <Plus class="h-6 w-6 text-blue-600" />
                     </div>
-                    <div class="text-sm font-bold text-slate-900 mb-1">Solte um curso aqui</div>
-                    <div class="text-xs text-muted-foreground max-w-[240px]">
+                    <div class="mb-1 text-sm font-bold text-slate-900">Solte um curso aqui</div>
+                    <div class="max-w-[240px] text-xs text-muted-foreground">
                       Selecione turmas na sidebar e arraste o curso para comecar
                     </div>
                   </div>
@@ -2115,200 +2288,226 @@ function updateSelectedStart(patch: Partial<StartPayload>) {
           </div>
 
           <div
-              class="h-full bg-muted/30 border-l min-h-0"
-              :class="rightPanelCollapsed ? 'flex items-start justify-center pt-4' : 'overflow-auto p-4'"
+            class="h-full min-h-0 border-l bg-muted/30"
+            :class="rightPanelCollapsed ? 'flex items-start justify-center pt-4' : 'overflow-auto p-4'"
           >
             <Button
-                size="icon"
-                variant="ghost"
-                class="h-8 w-8 shrink-0"
-                :title="rightPanelCollapsed ? 'Expandir painel de configuracao' : 'Recolher painel de configuracao'"
-                @click="rightPanelCollapsed = !rightPanelCollapsed"
+              size="icon"
+              variant="ghost"
+              class="h-8 w-8 shrink-0"
+              :title="rightPanelCollapsed ? 'Expandir painel de configuracao' : 'Recolher painel de configuracao'"
+              @click="rightPanelCollapsed = !rightPanelCollapsed"
             >
-              <ChevronRight class="h-4 w-4 transition-transform" :class="rightPanelCollapsed ? '' : 'rotate-180'"/>
+              <ChevronRight class="h-4 w-4 transition-transform" :class="rightPanelCollapsed ? '' : 'rotate-180'" />
             </Button>
 
             <template v-if="!rightPanelCollapsed">
-
-            <div v-if="activeWorkflow" class="mb-4 rounded-2xl border bg-white shadow-sm">
-              <div class="p-4">
-                <div class="flex items-center justify-between gap-3">
-                  <div>
-                    <div class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Workflow</div>
-                    <div class="text-sm font-bold text-slate-900">{{ activeWorkflow.name }}</div>
-                    <div class="mt-1 grid gap-0.5 text-[10px] text-slate-600">
-                      <div class="flex items-center gap-1">
-                        <span class="font-semibold">Proxima execucao:</span>
-                        <span>{{ scheduleNextExecutionLabel(workflowScheduleOf(activeWorkflow)) }}</span>
-                      </div>
-                      <div class="flex items-center gap-1">
-                        <span class="font-semibold">Ultima execucao:</span>
-                        <span>{{ scheduleLastExecutionLabel(workflowScheduleOf(activeWorkflow)) }}</span>
-                      </div>
-                      <div class="flex items-center gap-1">
-                        <span class="font-semibold">Frequencia:</span>
-                        <span>{{ scheduleFrequencyLabel(workflowScheduleOf(activeWorkflow)) }}</span>
+              <div v-if="activeWorkflow" class="mb-4 rounded-2xl border bg-white shadow-sm">
+                <div class="p-4">
+                  <div class="flex items-center justify-between gap-3">
+                    <div>
+                      <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Workflow</div>
+                      <div class="text-sm font-bold text-slate-900">{{ activeWorkflow.name }}</div>
+                      <div class="mt-1 grid gap-0.5 text-[10px] text-slate-600">
+                        <div class="flex items-center gap-1">
+                          <span class="font-semibold">Proxima execucao:</span>
+                          <span>{{ scheduleNextExecutionLabel(workflowScheduleOf(activeWorkflow)) }}</span>
+                        </div>
+                        <div class="flex items-center gap-1">
+                          <span class="font-semibold">Ultima execucao:</span>
+                          <span>{{ scheduleLastExecutionLabel(workflowScheduleOf(activeWorkflow)) }}</span>
+                        </div>
+                        <div class="flex items-center gap-1">
+                          <span class="font-semibold">Frequencia:</span>
+                          <span>{{ scheduleFrequencyLabel(workflowScheduleOf(activeWorkflow)) }}</span>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                  <span
+                    <span
                       class="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold"
                       :class="workflowStatusMeta(activeWorkflow.status).class"
-                  >
-              {{ workflowStatusMeta(activeWorkflow.status).label }}
-            </span>
-                </div>
-              </div>
-            </div>
-            <div class="mb-3 flex items-center justify-between">
-              <div class="text-sm font-semibold">Configuracao</div>
-              <span
-                  class="inline-flex items-center rounded-full border border-slate-200 bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-700"
-              >
-          {{
-                  selectedNode ? (selectedNode.type === 'condition' ? 'IF' : selectedNode.type === 'start' ? 'INICIO' : 'CURSO') : '-'
-                }}
-        </span>
-            </div>
-
-            <div v-if="!selectedNode" class="rounded-2xl border bg-white shadow-sm">
-              <div class="p-4 text-sm text-muted-foreground">Selecione um node no canvas para configurar.</div>
-            </div>
-            <div v-else-if="selectedNode.type === 'course'" class="rounded-2xl border bg-white shadow-sm">
-              <div class="space-y-2 p-4">
-                <div class="text-sm font-semibold">Curso {{ selectedNode.data?.payload?.courseName }}</div>
-                <div class="text-xs text-muted-foreground">
-                  Turmas no card: <b>{{ selectedNode.data?.payload?.classes?.length || 0 }}</b>
-                </div>
-                <div class="text-xs text-muted-foreground">
-                  Use as conexoes por turma para dizer exatamente quem sai (ex.: X1) e quem entra (ex.: Y3).
-                </div>
-              </div>
-            </div>
-            <div v-else-if="selectedNode.type === 'start'" class="rounded-2xl border bg-white shadow-sm">
-              <div class="space-y-3 p-4">
-                <div class="text-sm font-semibold">Configuracao do Inicio</div>
-
-                <div class="space-y-2 rounded-xl border p-3">
-                  <div>
-                    <div class="text-xs font-semibold">Execucao do workflow</div>
-                    <div class="text-[11px] text-muted-foreground">Defina se a execucao e unica ou recorrente</div>
+                    >
+                      {{ workflowStatusMeta(activeWorkflow.status).label }}
+                    </span>
                   </div>
-                  <div class="grid gap-2 pt-1">
-                    <label
+                </div>
+              </div>
+              <div class="mb-3 flex items-center justify-between">
+                <div class="text-sm font-semibold">Configuracao</div>
+                <span
+                  class="inline-flex items-center rounded-full border border-slate-200 bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-700"
+                >
+                  {{ nodeTypeLabel(selectedNode?.type) }}
+                </span>
+              </div>
+
+              <div v-if="!selectedNode" class="rounded-2xl border bg-white shadow-sm">
+                <div class="p-4 text-sm text-muted-foreground">Selecione um node no canvas para configurar.</div>
+              </div>
+              <div v-else-if="selectedNode.type === 'course'" class="rounded-2xl border bg-white shadow-sm">
+                <div class="space-y-2 p-4">
+                  <div class="text-sm font-semibold">Curso {{ selectedNode.data?.payload?.courseName }}</div>
+                  <div class="text-xs text-muted-foreground">
+                    Turmas no card: <b>{{ selectedNode.data?.payload?.classes?.length || 0 }}</b>
+                  </div>
+                  <div class="text-xs text-muted-foreground">
+                    Use as conexoes por turma para dizer exatamente quem sai (ex.: X1) e quem entra (ex.: Y3).
+                  </div>
+                </div>
+              </div>
+              <div v-else-if="selectedNode.type === 'comment'" class="rounded-2xl border bg-white shadow-sm">
+                <div class="space-y-3 p-4">
+                  <div>
+                    <div class="text-sm font-semibold">Comentário</div>
+                    <div class="text-[11px] text-muted-foreground">
+                      Use este bloco para escrever regras, lógicas e observações livres do workflow.
+                    </div>
+                  </div>
+
+                  <div class="space-y-1">
+                    <Label class="text-[11px]">Texto</Label>
+                    <Textarea
+                      :model-value="selectedNode.data?.payload?.text || ''"
+                      class="min-h-[220px] resize-y"
+                      placeholder="Escreva aqui a anotação do workflow..."
+                      @update:model-value="(val) => updateSelectedComment({ text: String(val) })"
+                    />
+                  </div>
+                </div>
+              </div>
+              <div v-else-if="selectedNode.type === 'start'" class="rounded-2xl border bg-white shadow-sm">
+                <div class="space-y-3 p-4">
+                  <div class="text-sm font-semibold">Configuracao do Inicio</div>
+
+                  <div class="space-y-2 rounded-xl border p-3">
+                    <div>
+                      <div class="text-xs font-semibold">Execucao do workflow</div>
+                      <div class="text-[11px] text-muted-foreground">Defina se a execucao e unica ou recorrente</div>
+                    </div>
+                    <div class="grid gap-2 pt-1">
+                      <label
                         v-for="opt in EXECUTION_MODE_OPTIONS"
                         :key="opt.value"
-                        class="flex items-center gap-2 rounded-lg border bg-white p-2 cursor-pointer hover:bg-slate-50"
-                    >
-                      <input
+                        class="flex cursor-pointer items-center gap-2 rounded-lg border bg-white p-2 hover:bg-slate-50"
+                      >
+                        <input
                           type="radio"
                           :name="`exec-mode-${selectedNode.id}`"
                           :value="opt.value"
                           :checked="selectedNode.data?.payload?.executionMode === opt.value"
                           @change="() => updateSelectedStart({ executionMode: opt.value })"
-                      />
-                      <span class="text-[11px] text-slate-900">{{ opt.label }}</span>
-                    </label>
+                        />
+                        <span class="text-[11px] text-slate-900">{{ opt.label }}</span>
+                      </label>
+                    </div>
                   </div>
-                </div>
 
-                <div class="space-y-2 rounded-xl border p-3">
-                  <div>
-                    <div class="text-xs font-semibold">Periodo de execucao</div>
-                    <div class="text-[11px] text-muted-foreground">Inicie em uma data ou defina um intervalo</div>
-                  </div>
-                  <div class="grid grid-cols-1 gap-2 pt-1">
-                    <div class="space-y-1">
-                      <Label class="text-[11px]">Data inicio</Label>
-                      <DatePicker
+                  <div class="space-y-2 rounded-xl border p-3">
+                    <div>
+                      <div class="text-xs font-semibold">Periodo de execucao</div>
+                      <div class="text-[11px] text-muted-foreground">Inicie em uma data ou defina um intervalo</div>
+                    </div>
+                    <div class="grid grid-cols-1 gap-2 pt-1">
+                      <div class="space-y-1">
+                        <Label class="text-[11px]">Data inicio</Label>
+                        <DatePicker
                           :model-value="selectedNode.data?.payload?.startDate"
                           @update:model-value="(val) => updateSelectedStart({ startDate: String(val) })"
-                      />
-                    </div>
-                    <div class="space-y-1">
-                      <Label class="text-[11px]">Data termino</Label>
-                      <DatePicker
-                          :model-value="selectedNode.data?.payload?.endDate"
-                          :class="selectedNode.data?.payload?.executionMode === 'once' && !selectedNode.data?.payload?.endDate ? 'border-rose-300' : ''"
-                          @update:model-value="(val) => updateSelectedStart({ endDate: String(val) })"
-                      />
-                      <div
-                          v-if="selectedNode.data?.payload?.executionMode === 'once' && !selectedNode.data?.payload?.endDate"
-                          class="text-[10px] text-rose-600"
-                      >
-                        Informe a data de termino para execucao unica.
+                        />
                       </div>
-                    </div>
-                    <div v-if="selectedNode.data?.payload?.executionMode === 'recurring'" class="space-y-1">
-                      <Label class="text-[11px]">Horario diario</Label>
-                      <Input
+                      <div class="space-y-1">
+                        <Label class="text-[11px]">Data termino</Label>
+                        <DatePicker
+                          :model-value="selectedNode.data?.payload?.endDate"
+                          :class="
+                            selectedNode.data?.payload?.executionMode === 'once' && !selectedNode.data?.payload?.endDate
+                              ? 'border-rose-300'
+                              : ''
+                          "
+                          @update:model-value="(val) => updateSelectedStart({ endDate: String(val) })"
+                        />
+                        <div
+                          v-if="
+                            selectedNode.data?.payload?.executionMode === 'once' && !selectedNode.data?.payload?.endDate
+                          "
+                          class="text-[10px] text-rose-600"
+                        >
+                          Informe a data de termino para execucao unica.
+                        </div>
+                      </div>
+                      <div v-if="selectedNode.data?.payload?.executionMode === 'recurring'" class="space-y-1">
+                        <Label class="text-[11px]">Horario diario</Label>
+                        <Input
                           type="time"
                           step="60"
                           :model-value="selectedNode.data?.payload?.runDailyAt"
                           @update:model-value="(val) => updateSelectedStart({ runDailyAt: String(val) })"
-                      />
-                      <div class="text-[10px] text-muted-foreground">
-                        Execucao diaria no horario definido.
+                        />
+                        <div class="text-[10px] text-muted-foreground">Execucao diaria no horario definido.</div>
                       </div>
-                    </div>
-                    <div v-if="selectedNode.data?.payload?.executionMode === 'recurring'" class="space-y-1">
-                      <Label class="text-[11px]">Repetir a cada</Label>
-                      <select
+                      <div v-if="selectedNode.data?.payload?.executionMode === 'recurring'" class="space-y-1">
+                        <Label class="text-[11px]">Repetir a cada</Label>
+                        <select
                           class="h-9 w-full rounded-md border border-slate-200 bg-white px-2 text-xs"
-                          :value="selectedNode.data?.payload?.runIntervalMinutes === null ? '' : String(selectedNode.data?.payload?.runIntervalMinutes)"
-                          @change="(e) => {
-                      const value = (e.target as HTMLSelectElement).value
-                      updateSelectedStart({ runIntervalMinutes: value ? Number(value) : null })
-                    }"
-                      >
-                        <option v-for="opt in repeatIntervalOptions" :key="opt.value" :value="opt.value">{{
-                            opt.label
-                          }}
-                        </option>
-                      </select>
-                      <div class="text-[10px] text-muted-foreground">
-                        Se definido, repete durante o dia no intervalo escolhido.
+                          :value="
+                            selectedNode.data?.payload?.runIntervalMinutes === null
+                              ? ''
+                              : String(selectedNode.data?.payload?.runIntervalMinutes)
+                          "
+                          @change="
+                            (e) => {
+                              const value = (e.target as HTMLSelectElement).value
+                              updateSelectedStart({ runIntervalMinutes: value ? Number(value) : null })
+                            }
+                          "
+                        >
+                          <option v-for="opt in repeatIntervalOptions" :key="opt.value" :value="opt.value">
+                            {{ opt.label }}
+                          </option>
+                        </select>
+                        <div class="text-[10px] text-muted-foreground">
+                          Se definido, repete durante o dia no intervalo escolhido.
+                        </div>
                       </div>
                     </div>
                   </div>
-                </div>
 
-                <div class="text-[11px] text-slate-600">
-                  Conecte o inicio a uma turma ou condicao para definir onde o fluxo comeca.
+                  <div class="text-[11px] text-slate-600">
+                    Conecte o inicio a uma turma ou condicao para definir onde o fluxo comeca.
+                  </div>
                 </div>
               </div>
-            </div>
-            <div v-else-if="selectedNode.type === 'condition'" class="rounded-2xl border bg-white shadow-sm">
-              <div v-if="conditionDetailsOpenId === selectedNode.id" class="space-y-3 p-4">
-                <ConditionConfigForm
+              <div v-else-if="selectedNode.type === 'condition'" class="rounded-2xl border bg-white shadow-sm">
+                <div v-if="conditionDetailsOpenId === selectedNode.id" class="space-y-3 p-4">
+                  <ConditionConfigForm
                     v-if="selectedNode.data?.payload"
                     :value="selectedNode.data.payload"
                     :requires-contract="selectedConditionRequiresContract"
                     :show-outputs-note="true"
                     :port-color="portColor"
                     @update="updateSelectedCondition"
-                />
-              </div>
-              <div v-else class="p-4 text-sm text-muted-foreground text-center">
-                <div class="mb-2">Clique duas vezes no nó de condição no canvas para abrir as configurações.</div>
-                <Button size="sm" variant="outline" @click="toggleConditionDetails(selectedNode.id)">
-                  Abrir Configurações
-                </Button>
-              </div>
-            </div>
-
-            <div class="my-4 h-px w-full bg-border"/>
-
-            <div class="rounded-2xl border bg-white shadow-sm">
-              <div class="p-4">
-                <div class="text-xs font-semibold">Como editar conexoes</div>
-                <div class="mt-2 space-y-1 text-xs text-muted-foreground">
-                  <div>- Ative Modo conectar.</div>
-                  <div>- Arraste do ponto de saida ate a entrada.</div>
-                  <div>- Clique na linha para remover.</div>
+                  />
+                </div>
+                <div v-else class="p-4 text-center text-sm text-muted-foreground">
+                  <div class="mb-2">Clique duas vezes no nó de condição no canvas para abrir as configurações.</div>
+                  <Button size="sm" variant="outline" @click="toggleConditionDetails(selectedNode.id)">
+                    Abrir Configurações
+                  </Button>
                 </div>
               </div>
-            </div>
+
+              <div class="my-4 h-px w-full bg-border" />
+
+              <div class="rounded-2xl border bg-white shadow-sm">
+                <div class="p-4">
+                  <div class="text-xs font-semibold">Como editar conexoes</div>
+                  <div class="mt-2 space-y-1 text-xs text-muted-foreground">
+                    <div>- Ative Modo conectar.</div>
+                    <div>- Arraste do ponto de saida ate a entrada.</div>
+                    <div>- Clique na linha para remover.</div>
+                  </div>
+                </div>
+              </div>
             </template>
           </div>
         </div>
@@ -2322,4 +2521,3 @@ function updateSelectedStart(patch: Partial<StartPayload>) {
 @import '@vue-flow/core/dist/theme-default.css';
 @import '@vue-flow/controls/dist/style.css';
 </style>
-

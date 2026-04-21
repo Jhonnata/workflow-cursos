@@ -19,6 +19,7 @@ import {
 } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useToast } from '@/components/ui/toast'
 import ConditionConfigForm from '@/components/condition-config-form.vue'
 import { onlyWithContractFlag } from '@/lib/workflow'
@@ -79,6 +80,14 @@ type ApiContract = {
   status?: string
 }
 
+type ApiClassInfo = {
+  id?: number | string
+  name?: string
+  identifier?: string
+  nodeKey?: string
+  stats?: Record<string, unknown>
+}
+
 type ApiStep = {
   nodeKey?: string
   order?: number
@@ -87,13 +96,7 @@ type ApiStep = {
   courseName?: string
   className?: string
   classNodeKey?: string
-  class?: {
-    id?: number
-    name?: string
-    identifier?: string
-    nodeKey?: string
-    stats?: Record<string, unknown>
-  }
+  class?: ApiClassInfo
   status?: string
   isFinalStep?: boolean
   eligibleForNext?: boolean | null
@@ -114,6 +117,63 @@ type ApiLesson = {
   concluded?: string | number | boolean | null
 }
 
+type WorkflowMembershipProgress = {
+  completedSteps: number
+  totalSteps: number
+  percentage: number | null
+}
+
+type WorkflowMembershipTimelineItem = {
+  order?: number
+  classId?: string | number
+  classInfo: ApiClassInfo | null
+  classLabel: string
+  status?: string
+  concluded?: boolean | null
+}
+
+type WorkflowMembershipRun = {
+  id?: string | number
+  status?: string
+  executionMode?: string
+  scheduledAt?: string
+  startedAt?: string
+  finishedAt?: string
+}
+
+type WorkflowMembershipTransition = {
+  id: string
+  fromClass?: string | number
+  fromClassInfo: ApiClassInfo | null
+  toClass?: string | number
+  toClassInfo: ApiClassInfo | null
+  conditionNodeKey?: string
+  result?: string
+  mode?: string
+  reasons: string[]
+  createdAt?: string
+  run: WorkflowMembershipRun | null
+}
+
+type WorkflowMembership = {
+  status?: string
+  timelinePath: string[]
+  timeline: WorkflowMembershipTimelineItem[]
+  entryClass?: string | number
+  entryClassInfo: ApiClassInfo | null
+  currentClass?: string | number
+  currentClassInfo: ApiClassInfo | null
+  currentStepOrder?: number
+  currentStepNodeKey?: string
+  currentStepLabel?: string
+  progress: WorkflowMembershipProgress | null
+  joinedAt?: string
+  lastTransitionAt?: string
+  completedAt?: string
+  transitions: WorkflowMembershipTransition[]
+  lastRun: WorkflowMembershipRun | null
+}
+
 type ApiApprentice = {
   apprenticeId?: number
   name?: string
@@ -121,6 +181,7 @@ type ApiApprentice = {
   email?: string
   contracts?: ApiContract[]
   steps?: ApiStep[]
+  workflowMembership?: unknown
 }
 
 type RowItem = {
@@ -130,6 +191,8 @@ type RowItem = {
   email: string
   contract: RowContract | null
   progress: Record<string, ProgressItem>
+  steps: ApiStep[]
+  workflowMembership: WorkflowMembership | null
 }
 
 const props = defineProps<{
@@ -137,6 +200,219 @@ const props = defineProps<{
   edges: GraphEdge[]
   workflowId: string | number
 }>()
+
+function toOptionalNumber(value: unknown) {
+  if (value === undefined || value === null || value === '') return undefined
+  const num = Number(value)
+  return Number.isFinite(num) ? num : undefined
+}
+
+function toOptionalBoolean(value: unknown) {
+  if (value === undefined || value === null || value === '') return null
+  if (typeof value === 'boolean') return value
+  if (value === 1 || value === '1') return true
+  if (value === 0 || value === '0') return false
+  const normalized = String(value).trim().toLowerCase()
+  if (!normalized) return null
+  if (['true', 'sim', 'yes', 'y'].includes(normalized)) return true
+  if (['false', 'nao', 'no', 'n'].includes(normalized)) return false
+  return null
+}
+
+function normalizeClassInfo(value: unknown): ApiClassInfo | null {
+  if (!value || typeof value !== 'object') return null
+  const raw = value as Record<string, any>
+  const id = raw.id ?? raw.classId ?? raw.class
+  const name = String(raw.name ?? '').trim()
+  const identifier = String(raw.identifier ?? '').trim()
+  const nodeKey = String(raw.nodeKey ?? raw.node_key ?? '').trim()
+  const stats = raw.stats && typeof raw.stats === 'object' ? raw.stats : undefined
+  const info: ApiClassInfo = {
+    id: id !== undefined && id !== null && id !== '' ? id : undefined,
+    name: name || undefined,
+    identifier: identifier || undefined,
+    nodeKey: nodeKey || undefined,
+    stats,
+  }
+  return info.id !== undefined || info.name || info.identifier || info.nodeKey ? info : null
+}
+
+function formatClassLabel(info?: ApiClassInfo | null, fallback?: unknown) {
+  const identifier = String(info?.identifier || '').trim()
+  const name = String(info?.name || '').trim()
+  if (identifier && name) return `${identifier} - ${name}`
+  if (identifier) return identifier
+  if (name) return name
+  if (fallback === undefined || fallback === null || fallback === '') return '-'
+  return typeof fallback === 'number' || /^\d+$/.test(String(fallback)) ? `#${String(fallback)}` : String(fallback)
+}
+
+function normalizeTimelinePathItem(value: unknown) {
+  if (value === undefined || value === null || value === '') return ''
+  if (typeof value === 'string' || typeof value === 'number') return String(value)
+  if (typeof value === 'object') {
+    const raw = value as Record<string, any>
+    const classInfo = normalizeClassInfo(raw.classInfo ?? raw.class ?? raw)
+    return formatClassLabel(classInfo, raw.classId ?? raw.class ?? raw.id)
+  }
+  return String(value)
+}
+
+function normalizeWorkflowRun(value: unknown): WorkflowMembershipRun | null {
+  if (!value || typeof value !== 'object') return null
+  const raw = value as Record<string, any>
+  const run: WorkflowMembershipRun = {
+    id: raw.id ?? undefined,
+    status: String(raw.status ?? '').trim() || undefined,
+    executionMode: String(raw.executionMode ?? raw.execution_mode ?? '').trim() || undefined,
+    scheduledAt: String(raw.scheduledAt ?? raw.scheduled_at ?? '').trim() || undefined,
+    startedAt: String(raw.startedAt ?? raw.started_at ?? '').trim() || undefined,
+    finishedAt: String(raw.finishedAt ?? raw.finished_at ?? '').trim() || undefined,
+  }
+  return run.id !== undefined ||
+    run.status ||
+    run.executionMode ||
+    run.scheduledAt ||
+    run.startedAt ||
+    run.finishedAt
+    ? run
+    : null
+}
+
+function normalizeWorkflowTransition(value: unknown): WorkflowMembershipTransition | null {
+  if (!value || typeof value !== 'object') return null
+  const raw = value as Record<string, any>
+  const id = String(raw.id ?? '').trim()
+  const fromClass = raw.fromClass ?? raw.from_class ?? raw.originClass ?? raw.origin_class
+  const toClass = raw.toClass ?? raw.to_class ?? raw.destinationClass ?? raw.destination_class
+  const transition: WorkflowMembershipTransition = {
+    id:
+      id ||
+      [
+        raw.createdAt ?? raw.created_at ?? '',
+        raw.fromClass ?? raw.from_class ?? '',
+        raw.toClass ?? raw.to_class ?? '',
+        raw.conditionNodeKey ?? raw.condition_node_key ?? '',
+      ]
+        .map((item) => String(item || '').trim())
+        .filter(Boolean)
+        .join(':') ||
+      'transition',
+    fromClass: fromClass !== undefined && fromClass !== null && fromClass !== '' ? fromClass : undefined,
+    fromClassInfo: normalizeClassInfo(raw.fromClassInfo ?? raw.from_class_info),
+    toClass: toClass !== undefined && toClass !== null && toClass !== '' ? toClass : undefined,
+    toClassInfo: normalizeClassInfo(raw.toClassInfo ?? raw.to_class_info),
+    conditionNodeKey: String(raw.conditionNodeKey ?? raw.condition_node_key ?? '').trim() || undefined,
+    result: String(raw.result ?? '').trim() || undefined,
+    mode: String(raw.mode ?? '').trim() || undefined,
+    reasons: Array.isArray(raw.reasons) ? raw.reasons.map((item: any) => String(item)).filter(Boolean) : [],
+    createdAt: String(raw.createdAt ?? raw.created_at ?? '').trim() || undefined,
+    run: normalizeWorkflowRun(raw.run),
+  }
+  return transition.fromClass !== undefined ||
+    transition.fromClassInfo ||
+    transition.toClass !== undefined ||
+    transition.toClassInfo ||
+    transition.conditionNodeKey ||
+    transition.result ||
+    transition.mode ||
+    transition.reasons.length > 0 ||
+    transition.createdAt ||
+    transition.run
+    ? transition
+    : null
+}
+
+function normalizeWorkflowTimelineItem(value: unknown): WorkflowMembershipTimelineItem | null {
+  if (!value || typeof value !== 'object') return null
+  const raw = value as Record<string, any>
+  const classInfo = normalizeClassInfo(raw.classInfo ?? raw.class ?? raw)
+  const classId = raw.classId ?? raw.class ?? raw.id
+  const classLabel = formatClassLabel(classInfo, classId)
+  const item: WorkflowMembershipTimelineItem = {
+    order: toOptionalNumber(raw.order),
+    classId: classId !== undefined && classId !== null && classId !== '' ? classId : undefined,
+    classInfo,
+    classLabel,
+    status: String(raw.status ?? '').trim() || undefined,
+    concluded: toOptionalBoolean(raw.concluded),
+  }
+  return item.order !== undefined || item.classInfo || item.classId !== undefined || item.status || item.concluded !== null
+    ? item
+    : null
+}
+
+function normalizeWorkflowProgress(value: unknown): WorkflowMembershipProgress | null {
+  if (!value || typeof value !== 'object') return null
+  const raw = value as Record<string, any>
+  const completedSteps = toOptionalNumber(raw.completedSteps ?? raw.completed_steps)
+  const totalSteps = toOptionalNumber(raw.totalSteps ?? raw.total_steps)
+  const percentage = toOptionalNumber(raw.percentage)
+  if (completedSteps === undefined && totalSteps === undefined && percentage === undefined) return null
+  return {
+    completedSteps: completedSteps ?? 0,
+    totalSteps: totalSteps ?? 0,
+    percentage: percentage ?? null,
+  }
+}
+
+function normalizeWorkflowMembership(value: unknown): WorkflowMembership | null {
+  if (!value || typeof value !== 'object') return null
+  const raw = value as Record<string, any>
+  const timeline = Array.isArray(raw.timeline)
+    ? raw.timeline
+        .map(normalizeWorkflowTimelineItem)
+        .filter((item): item is WorkflowMembershipTimelineItem => item !== null)
+        .sort((a, b) => (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER))
+    : []
+  const timelinePath = Array.isArray(raw.timelinePath)
+    ? raw.timelinePath.map(normalizeTimelinePathItem).filter(Boolean)
+    : []
+  const membership: WorkflowMembership = {
+    status: String(raw.status ?? '').trim() || undefined,
+    timelinePath,
+    timeline,
+    entryClass:
+      raw.entryClass !== undefined && raw.entryClass !== null && raw.entryClass !== '' ? raw.entryClass : undefined,
+    entryClassInfo: normalizeClassInfo(raw.entryClassInfo ?? raw.entry_class_info),
+    currentClass:
+      raw.currentClass !== undefined && raw.currentClass !== null && raw.currentClass !== ''
+        ? raw.currentClass
+        : undefined,
+    currentClassInfo: normalizeClassInfo(raw.currentClassInfo ?? raw.current_class_info),
+    currentStepOrder: toOptionalNumber(raw.currentStepOrder ?? raw.current_step_order),
+    currentStepNodeKey: String(raw.currentStepNodeKey ?? raw.current_step_node_key ?? '').trim() || undefined,
+    currentStepLabel: String(raw.currentStepLabel ?? raw.current_step_label ?? '').trim() || undefined,
+    progress: normalizeWorkflowProgress(raw.progress),
+    joinedAt: String(raw.joinedAt ?? raw.joined_at ?? '').trim() || undefined,
+    lastTransitionAt: String(raw.lastTransitionAt ?? raw.last_transition_at ?? '').trim() || undefined,
+    completedAt: String(raw.completedAt ?? raw.completed_at ?? '').trim() || undefined,
+    transitions: Array.isArray(raw.transitions)
+      ? raw.transitions
+          .map(normalizeWorkflowTransition)
+          .filter((item): item is WorkflowMembershipTransition => item !== null)
+      : [],
+    lastRun: normalizeWorkflowRun(raw.lastRun ?? raw.last_run),
+  }
+  const hasData =
+    membership.status ||
+    membership.timelinePath.length > 0 ||
+    membership.timeline.length > 0 ||
+    membership.entryClass !== undefined ||
+    membership.entryClassInfo ||
+    membership.currentClass !== undefined ||
+    membership.currentClassInfo ||
+    membership.currentStepOrder !== undefined ||
+    membership.currentStepNodeKey ||
+    membership.currentStepLabel ||
+    membership.progress ||
+    membership.joinedAt ||
+    membership.lastTransitionAt ||
+    membership.completedAt ||
+    membership.transitions.length > 0 ||
+    membership.lastRun
+  return hasData ? membership : null
+}
 
 function deriveCourseSequence(nodes: GraphNode[], edges: GraphEdge[]): CourseSeqItem[] {
   const courseNodes = nodes.filter((n) => n.type === 'course')
@@ -325,7 +601,42 @@ function isInProgressStatus(status?: string) {
 
 function fmtDate(d?: string) {
   if (!d) return '-'
-  return new Date(d).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })
+  const date = new Date(d)
+  if (Number.isNaN(date.getTime())) return '-'
+  return date.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })
+}
+
+function fmtLocalDateTime(value?: string) {
+  if (!value) return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '-'
+  return date.toLocaleString('pt-BR', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+function humanizeToken(value?: string) {
+  const raw = String(value || '').trim()
+  if (!raw) return '-'
+  return raw
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function runStatusConfig(status?: string) {
+  const raw = String(status || '').trim().toLowerCase()
+  const map: Record<string, { label: string; class: string }> = {
+    queued: { label: 'queued', class: 'border-amber-200 bg-amber-50 text-amber-700' },
+    running: { label: 'running', class: 'border-blue-200 bg-blue-50 text-blue-700' },
+    done: { label: 'done', class: 'border-emerald-200 bg-emerald-50 text-emerald-700' },
+    failed: { label: 'failed', class: 'border-rose-200 bg-rose-50 text-rose-700' },
+  }
+  return map[raw] || { label: raw || '-', class: 'border-slate-200 bg-slate-50 text-slate-600' }
 }
 
 function contractDurationLabel(start?: string, end?: string) {
@@ -624,6 +935,7 @@ const rows = ref<RowItem[]>([])
 const edit = ref<EditState | null>(null)
 const searchQuery = ref('')
 const classStatusFilter = ref<'inProgress' | 'concluded' | 'incomplete' | 'all'>('inProgress')
+const transitionsLimit = ref<0 | 5 | 10 | 20>(5)
 const runId = ref('')
 const hasLoadedRows = ref(false)
 const totalCount = ref(0)
@@ -631,6 +943,8 @@ const pageLimit = ref(10)
 const pageOffset = ref(0)
 const isRunningEvolution = ref(false)
 const evolvingStepKey = ref('')
+const detailRowId = ref<number | null>(null)
+const detailTab = ref<'timeline' | 'transitions' | 'steps'>('timeline')
 const lessonsModal = ref<{
   open: boolean
   apprenticeName: string
@@ -690,6 +1004,16 @@ function closeLessonsModal() {
   lessonsModal.value.open = false
 }
 
+function openDetail(row: RowItem, tab: 'timeline' | 'transitions' | 'steps' = 'timeline') {
+  detailRowId.value = row.id
+  detailTab.value = tab
+}
+
+function closeDetail() {
+  detailRowId.value = null
+  detailTab.value = 'timeline'
+}
+
 function reloadApprentices() {
   if (searchDebounceTimer) {
     clearTimeout(searchDebounceTimer)
@@ -697,6 +1021,16 @@ function reloadApprentices() {
   }
   hasLoadedRows.value = false
   loadApprenticeWorkflows()
+}
+
+function scheduleApprenticeReload(resetOffset = true) {
+  if (searchDebounceTimer) clearTimeout(searchDebounceTimer)
+  if (resetOffset) pageOffset.value = 0
+  searchDebounceTimer = setTimeout(() => {
+    hasLoadedRows.value = false
+    loadApprenticeWorkflows()
+    searchDebounceTimer = null
+  }, 350)
 }
 
 async function runEvolution() {
@@ -754,6 +1088,113 @@ function countIneligibleSteps(r: RowItem) {
     if (p?.eligibilityAny === false || p?.eligibleForNext === false) count++
   }
   return count
+}
+
+function hasWorkflowMembership(row: RowItem) {
+  return !!row.workflowMembership
+}
+
+function membershipProgressValue(row: RowItem) {
+  const percentage = row.workflowMembership?.progress?.percentage
+  if (percentage === undefined || percentage === null || !Number.isFinite(percentage)) return 0
+  return Math.max(0, Math.min(100, Number(percentage)))
+}
+
+function membershipProgressText(row: RowItem) {
+  const progress = row.workflowMembership?.progress
+  if (!progress) return '-'
+  return `${progress.completedSteps}/${progress.totalSteps}`
+}
+
+function membershipStepLabel(row: RowItem) {
+  const membership = row.workflowMembership
+  if (!membership) return '-'
+  const label = membership.currentStepLabel || 'Etapa atual'
+  const order =
+    membership.currentStepOrder !== undefined && membership.currentStepOrder !== null
+      ? `Etapa ${membership.currentStepOrder}`
+      : ''
+  return [order, label].filter(Boolean).join(' - ') || '-'
+}
+
+function membershipCurrentClassLabel(row: RowItem) {
+  const membership = row.workflowMembership
+  if (!membership) return '-'
+  return formatClassLabel(membership.currentClassInfo, membership.currentClass)
+}
+
+function membershipEntryClassLabel(row: RowItem) {
+  const membership = row.workflowMembership
+  if (!membership) return '-'
+  return formatClassLabel(membership.entryClassInfo, membership.entryClass)
+}
+
+function membershipTimelineSummary(row: RowItem) {
+  const membership = row.workflowMembership
+  if (!membership) return '-'
+  const path =
+    membership.timelinePath.length > 0
+      ? membership.timelinePath
+      : membership.timeline.map((item) => item.classLabel).filter(Boolean)
+  if (path.length === 0) return '-'
+  if (path.length <= 3) return path.join(' -> ')
+  return `${path.slice(0, 3).join(' -> ')} -> +${path.length - 3}`
+}
+
+function membershipTimelineItems(row: RowItem) {
+  const membership = row.workflowMembership
+  if (!membership) return []
+  if (membership.timeline.length > 0) return membership.timeline
+  return membership.timelinePath.map((label, index) => ({
+    order: index + 1,
+    classInfo: null,
+    classId: undefined,
+    classLabel: label,
+    status: undefined,
+    concluded: null,
+  }))
+}
+
+function detailSteps(row: RowItem) {
+  if (courseSeq.value.length === 0 && row.steps.length > 0) {
+    return row.steps
+      .slice()
+      .sort((a, b) => (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER))
+      .map((step, index) => ({
+        key: `${row.id}:${step.nodeKey || step.courseId || step.courseName || index}`,
+        order: step.order ?? index + 1,
+        nodeKey: String(step.nodeKey || ''),
+        label: String(step.courseName || `Etapa ${index + 1}`),
+        progress: {
+          classId: step.classId,
+          className: String(step.class?.name ?? step.className ?? '').trim() || undefined,
+          classNodeKey: String(step.class?.nodeKey ?? step.classNodeKey ?? '').trim() || undefined,
+          status: step.status ?? undefined,
+          lessons: normalizeLessonList(step.lessons),
+        } as ProgressItem,
+      }))
+  }
+  return courseSeq.value.map((course, index) => {
+    const progress = getProgress(row, course)
+    return {
+      key: `${row.id}:${course.nodeId}`,
+      order: index + 1,
+      nodeKey: course.nodeId,
+      label: course.courseName,
+      progress,
+    }
+  })
+}
+
+function isCurrentDetailStep(row: RowItem, item: { order: number; nodeKey: string; label: string }) {
+  const membership = row.workflowMembership
+  if (!membership) return false
+  if (membership.currentStepNodeKey && membership.currentStepNodeKey === item.nodeKey) return true
+  if (membership.currentStepOrder !== undefined && membership.currentStepOrder === item.order) return true
+  if (membership.currentStepLabel && normalizeKey(membership.currentStepLabel) === normalizeKey(item.label)) {
+    return true
+  }
+  return false
 }
 
 function classDayLabel(item?: ProgressItem) {
@@ -855,6 +1296,7 @@ async function loadApprenticeWorkflows() {
       offset: pageOffset.value,
       q: q || undefined,
       classStatus: classStatusFilter.value || 'inProgress',
+      transitionsLimit: transitionsLimit.value,
     })
     const payload = res.data as any
     const list: ApiApprentice[] = Array.isArray(payload)
@@ -875,6 +1317,7 @@ async function loadApprenticeWorkflows() {
       const primary = selectPrimaryContract(contracts)
       const progress: Record<string, ProgressItem> = {}
       const steps = Array.isArray(item.steps) ? item.steps : []
+      const workflowMembership = normalizeWorkflowMembership((item as any)?.workflowMembership)
       for (const step of steps) {
         const key = String(step?.courseName || '').trim()
         if (!key) continue
@@ -968,6 +1411,8 @@ async function loadApprenticeWorkflows() {
             }
           : null,
         progress,
+        steps,
+        workflowMembership,
       }
     })
   } catch (e) {
@@ -1002,6 +1447,7 @@ watch(
       clearTimeout(searchDebounceTimer)
       searchDebounceTimer = null
     }
+    closeDetail()
     hasLoadedRows.value = false
     rows.value = []
     totalCount.value = 0
@@ -1013,32 +1459,42 @@ watch(
 watch(
   () => searchQuery.value,
   () => {
-    if (searchDebounceTimer) clearTimeout(searchDebounceTimer)
-    pageOffset.value = 0
-    searchDebounceTimer = setTimeout(() => {
-      hasLoadedRows.value = false
-      loadApprenticeWorkflows()
-      searchDebounceTimer = null
-    }, 350)
+    scheduleApprenticeReload(true)
   },
 )
 
 watch(
   () => classStatusFilter.value,
   () => {
-    if (searchDebounceTimer) {
-      clearTimeout(searchDebounceTimer)
-      searchDebounceTimer = null
-    }
-    pageOffset.value = 0
+    scheduleApprenticeReload(true)
+  },
+)
+
+watch(
+  () => transitionsLimit.value,
+  () => {
     hasLoadedRows.value = false
     loadApprenticeWorkflows()
+  },
+)
+
+watch(
+  () => rows.value,
+  () => {
+    if (detailRowId.value === null) return
+    if (!rows.value.some((row) => row.id === detailRowId.value)) {
+      closeDetail()
+    }
   },
 )
 
 const filteredRows = computed(() => {
   return rows.value
 })
+
+const selectedDetailRow = computed(() =>
+  detailRowId.value === null ? null : rows.value.find((row) => row.id === detailRowId.value) ?? null,
+)
 
 const isSearchActive = computed(() => searchQuery.value.trim().length > 0)
 const isLoading = computed(() => !hasLoadedRows.value)
@@ -1495,6 +1951,18 @@ async function saveEdit() {
               <option value="all">Status: Todos</option>
             </select>
           </div>
+          <div class="w-[170px]">
+            <select
+                v-model="transitionsLimit"
+                class="h-9 w-full rounded-md border border-slate-200 bg-white px-2 text-xs"
+                title="Quantidade de transicoes por aprendiz"
+            >
+              <option :value="0">Transicoes: Desativado</option>
+              <option :value="5">Transicoes: 5</option>
+              <option :value="10">Transicoes: 10</option>
+              <option :value="20">Transicoes: 20</option>
+            </select>
+          </div>
         </div>
         <div class="flex items-center justify-between gap-2 mt-2">
           <div class="text-[11px] text-slate-600">
@@ -1633,8 +2101,60 @@ async function saveEdit() {
 
               <!-- Summary area (instead of showing everything) -->
               <div class="flex-1 min-w-0">
-                <div class="flex items-center justify-between gap-3">
-                  <div class="flex flex-wrap items-center gap-2">
+                <div class="flex items-start justify-between gap-3">
+                  <div class="min-w-0 flex-1 space-y-3">
+                    <template v-if="hasWorkflowMembership(r)">
+                      <div class="flex flex-wrap items-center gap-2">
+                        <span
+                            :class="statusConfig(r.workflowMembership?.status).class"
+                            class="inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-bold"
+                        >
+                          <component :is="statusConfig(r.workflowMembership?.status).icon" class="h-3.5 w-3.5" />
+                          {{ statusConfig(r.workflowMembership?.status).label }}
+                        </span>
+                        <span class="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold text-slate-700">
+                          {{ membershipStepLabel(r) }}
+                        </span>
+                        <span class="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold text-slate-700">
+                          Atual: {{ membershipCurrentClassLabel(r) }}
+                        </span>
+                        <span class="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold text-slate-700">
+                          Entrada: {{ membershipEntryClassLabel(r) }}
+                        </span>
+                      </div>
+
+                      <div class="grid gap-2 xl:grid-cols-[minmax(240px,320px)_1fr]">
+                        <div class="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                          <div class="mb-2 flex items-center justify-between gap-2">
+                            <div class="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Progresso</div>
+                            <div class="text-sm font-bold text-slate-900">{{ membershipProgressValue(r) }}%</div>
+                          </div>
+                          <div class="h-2 overflow-hidden rounded-full bg-slate-200">
+                            <div
+                                class="h-full rounded-full bg-gradient-to-r from-blue-500 to-emerald-500 transition-all"
+                                :style="{ width: `${membershipProgressValue(r)}%` }"
+                            />
+                          </div>
+                          <div class="mt-2 text-[11px] text-slate-600">{{ membershipProgressText(r) }} etapas concluidas</div>
+                        </div>
+
+                        <div class="grid gap-2 md:grid-cols-2">
+                          <div class="rounded-xl border border-slate-200 bg-white p-3">
+                            <div class="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Timeline</div>
+                            <div class="text-[12px] font-medium text-slate-800">{{ membershipTimelineSummary(r) }}</div>
+                          </div>
+                          <div class="rounded-xl border border-slate-200 bg-white p-3">
+                            <div class="grid gap-1 text-[11px] text-slate-600">
+                              <div><span class="font-semibold text-slate-800">Entrada:</span> {{ fmtLocalDateTime(r.workflowMembership?.joinedAt) }}</div>
+                              <div><span class="font-semibold text-slate-800">Ultima transicao:</span> {{ fmtLocalDateTime(r.workflowMembership?.lastTransitionAt) }}</div>
+                              <div><span class="font-semibold text-slate-800">Conclusao:</span> {{ fmtLocalDateTime(r.workflowMembership?.completedAt) }}</div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </template>
+
+                    <div class="flex flex-wrap items-center gap-2">
                     <span
                         class="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-bold text-emerald-700"
                     >
@@ -1664,9 +2184,18 @@ async function saveEdit() {
                     <span class="text-xs text-slate-500 ml-1">
                       Clique para {{ isExpanded(r.id) ? 'recolher' : 'ver detalhes' }}
                     </span>
+                    </div>
                   </div>
 
                   <div class="flex items-center gap-2 shrink-0">
+                    <Button
+                        size="sm"
+                        variant="outline"
+                        class="h-8 px-3 text-[11px]"
+                        @click.stop="openDetail(r)"
+                    >
+                      Painel
+                    </Button>
                     <Button
                         size="icon"
                         variant="ghost"
@@ -1947,6 +2476,255 @@ async function saveEdit() {
             </div>
           </div>
         </div>
+      </div>
+    </div>
+
+    <!-- Detail Drawer -->
+    <div v-if="selectedDetailRow" class="absolute inset-0 z-20">
+      <div class="absolute inset-0 bg-black/25 backdrop-blur-sm" @click="closeDetail" />
+      <div class="absolute right-0 top-0 flex h-full w-[min(880px,96vw)] flex-col border-l bg-white shadow-2xl">
+        <div class="border-b bg-gradient-to-br from-slate-50 to-white px-5 py-4">
+          <div class="flex items-start justify-between gap-4">
+            <div class="min-w-0">
+              <div class="text-lg font-bold text-slate-900">{{ selectedDetailRow.name }}</div>
+              <div class="mt-1 flex flex-wrap items-center gap-2 text-[12px] text-slate-600">
+                <span>{{ selectedDetailRow.cpf || '-' }}</span>
+                <span>{{ selectedDetailRow.email || '-' }}</span>
+              </div>
+              <div class="mt-2 flex flex-wrap items-center gap-2">
+                <span
+                    v-if="selectedDetailRow.workflowMembership"
+                    :class="statusConfig(selectedDetailRow.workflowMembership.status).class"
+                    class="inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-bold"
+                >
+                  <component :is="statusConfig(selectedDetailRow.workflowMembership.status).icon" class="h-3.5 w-3.5" />
+                  {{ statusConfig(selectedDetailRow.workflowMembership.status).label }}
+                </span>
+                <span
+                    v-if="selectedDetailRow.workflowMembership?.lastRun"
+                    :class="runStatusConfig(selectedDetailRow.workflowMembership.lastRun.status).class"
+                    class="inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-semibold"
+                >
+                  Run {{ selectedDetailRow.workflowMembership.lastRun.id ?? '-' }} · {{ runStatusConfig(selectedDetailRow.workflowMembership.lastRun.status).label }}
+                </span>
+                <span class="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold text-slate-700">
+                  {{ membershipStepLabel(selectedDetailRow) }}
+                </span>
+              </div>
+            </div>
+            <Button size="icon" variant="ghost" class="h-8 w-8" @click="closeDetail">
+              <X class="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+
+        <Tabs v-model="detailTab" class="flex min-h-0 flex-1 flex-col">
+          <div class="border-b px-5 py-3">
+            <TabsList class="grid h-auto w-full grid-cols-3 bg-slate-100">
+              <TabsTrigger value="timeline" class="text-[12px]">Timeline</TabsTrigger>
+              <TabsTrigger value="transitions" class="text-[12px]">Transicoes</TabsTrigger>
+              <TabsTrigger value="steps" class="text-[12px]">Steps</TabsTrigger>
+            </TabsList>
+          </div>
+
+          <div class="flex-1 overflow-auto p-5">
+            <TabsContent value="timeline" class="mt-0 space-y-3">
+              <div
+                  v-if="membershipTimelineItems(selectedDetailRow).length === 0"
+                  class="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-[12px] text-slate-500"
+              >
+                Timeline indisponivel para este aprendiz.
+              </div>
+              <div v-else class="space-y-3">
+                <div
+                    v-for="item in membershipTimelineItems(selectedDetailRow)"
+                    :key="`${item.order || 0}:${item.classLabel}`"
+                    class="rounded-xl border border-slate-200 bg-slate-50 p-4"
+                >
+                  <div class="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <div class="flex items-center gap-2">
+                        <div class="flex h-7 w-7 items-center justify-center rounded-full bg-slate-900 text-[11px] font-bold text-white">
+                          {{ item.order || '-' }}
+                        </div>
+                        <div class="text-sm font-semibold text-slate-900">{{ item.classLabel }}</div>
+                      </div>
+                      <div class="mt-2 flex flex-wrap items-center gap-2">
+                        <span
+                            v-if="item.status"
+                            :class="statusConfig(item.status).class"
+                            class="inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-semibold"
+                        >
+                          <component :is="statusConfig(item.status).icon" class="h-3.5 w-3.5" />
+                          {{ statusConfig(item.status).label }}
+                        </span>
+                        <span
+                            v-if="item.concluded !== null"
+                            class="inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold"
+                            :class="item.concluded ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-white text-slate-600'"
+                        >
+                          {{ item.concluded ? 'Concluida' : 'Em aberto' }}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </TabsContent>
+
+            <TabsContent value="transitions" class="mt-0">
+              <div
+                  v-if="transitionsLimit === 0"
+                  class="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-[12px] text-slate-500"
+              >
+                Historico desativado.
+              </div>
+              <div
+                  v-else-if="!selectedDetailRow.workflowMembership || selectedDetailRow.workflowMembership.transitions.length === 0"
+                  class="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-[12px] text-slate-500"
+              >
+                Nenhuma transicao recente recebida para este aprendiz.
+              </div>
+              <div v-else class="overflow-x-auto rounded-xl border border-slate-200">
+                <table class="min-w-full text-left text-[12px]">
+                  <thead class="bg-slate-50 text-slate-600">
+                    <tr>
+                      <th class="px-3 py-2 font-semibold">Data</th>
+                      <th class="px-3 py-2 font-semibold">Origem</th>
+                      <th class="px-3 py-2 font-semibold">Destino</th>
+                      <th class="px-3 py-2 font-semibold">Resultado</th>
+                      <th class="px-3 py-2 font-semibold">Modo</th>
+                      <th class="px-3 py-2 font-semibold">Condicao</th>
+                      <th class="px-3 py-2 font-semibold">Run</th>
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y divide-slate-200 bg-white">
+                    <tr
+                        v-for="transition in selectedDetailRow.workflowMembership.transitions"
+                        :key="`${transition.id}:${transition.createdAt || ''}`"
+                        class="align-top"
+                    >
+                      <td class="px-3 py-3 text-slate-700">{{ fmtLocalDateTime(transition.createdAt) }}</td>
+                      <td class="px-3 py-3 text-slate-700">{{ formatClassLabel(transition.fromClassInfo, transition.fromClass) }}</td>
+                      <td class="px-3 py-3 text-slate-700">{{ formatClassLabel(transition.toClassInfo, transition.toClass) }}</td>
+                      <td class="px-3 py-3">
+                        <div class="font-semibold text-slate-900">{{ humanizeToken(transition.result) }}</div>
+                        <div v-if="transition.reasons.length > 0" class="mt-2 flex flex-wrap gap-1">
+                          <span
+                              v-for="reason in transition.reasons"
+                              :key="`${transition.id}:${reason}`"
+                              class="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-medium text-slate-700"
+                          >
+                            {{ humanizeToken(reason) }}
+                          </span>
+                        </div>
+                      </td>
+                      <td class="px-3 py-3 text-slate-700">{{ humanizeToken(transition.mode) }}</td>
+                      <td class="px-3 py-3 text-slate-700">{{ transition.conditionNodeKey || '-' }}</td>
+                      <td class="px-3 py-3">
+                        <template v-if="transition.run">
+                          <div class="font-semibold text-slate-900">#{{ transition.run.id ?? '-' }}</div>
+                          <div class="mt-1 flex flex-wrap items-center gap-1">
+                            <span
+                                :class="runStatusConfig(transition.run.status).class"
+                                class="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold"
+                            >
+                              {{ runStatusConfig(transition.run.status).label }}
+                            </span>
+                            <span
+                                v-if="transition.run.executionMode"
+                                class="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-medium text-slate-700"
+                            >
+                              {{ humanizeToken(transition.run.executionMode) }}
+                            </span>
+                          </div>
+                          <div class="mt-1 text-[11px] text-slate-500">
+                            {{ fmtLocalDateTime(transition.run.finishedAt || transition.run.startedAt || transition.run.scheduledAt) }}
+                          </div>
+                        </template>
+                        <span v-else class="text-slate-400">-</span>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </TabsContent>
+
+            <TabsContent value="steps" class="mt-0 space-y-3">
+              <div v-if="selectedDetailRow.workflowMembership" class="grid gap-2 md:grid-cols-3">
+                <div class="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  <div class="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Etapa atual</div>
+                  <div class="mt-1 text-sm font-bold text-slate-900">{{ membershipStepLabel(selectedDetailRow) }}</div>
+                </div>
+                <div class="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  <div class="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Turma atual</div>
+                  <div class="mt-1 text-sm font-bold text-slate-900">{{ membershipCurrentClassLabel(selectedDetailRow) }}</div>
+                </div>
+                <div class="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  <div class="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Progresso</div>
+                  <div class="mt-1 text-sm font-bold text-slate-900">{{ membershipProgressText(selectedDetailRow) }} · {{ membershipProgressValue(selectedDetailRow) }}%</div>
+                </div>
+              </div>
+
+              <div
+                  v-if="detailSteps(selectedDetailRow).length === 0"
+                  class="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-[12px] text-slate-500"
+              >
+                Nenhuma etapa encontrada para este workflow.
+              </div>
+              <div v-else class="space-y-3">
+                <div
+                    v-for="item in detailSteps(selectedDetailRow)"
+                    :key="item.key"
+                    class="rounded-xl border border-slate-200 bg-white p-4"
+                >
+                  <div class="flex flex-wrap items-start justify-between gap-3">
+                    <div class="min-w-0">
+                      <div class="flex flex-wrap items-center gap-2">
+                        <div class="flex h-7 w-7 items-center justify-center rounded-full bg-slate-900 text-[11px] font-bold text-white">
+                          {{ item.order }}
+                        </div>
+                        <div class="text-sm font-semibold text-slate-900">{{ item.label }}</div>
+                        <span
+                            v-if="isCurrentDetailStep(selectedDetailRow, item)"
+                            class="inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-700"
+                        >
+                          Atual
+                        </span>
+                      </div>
+                      <div class="mt-2 text-[12px] text-slate-600">
+                        {{ item.progress?.className || 'Sem turma vinculada' }}
+                      </div>
+                    </div>
+                    <span
+                        :class="statusConfig(item.progress?.status).class"
+                        class="inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-semibold"
+                    >
+                      <component :is="statusConfig(item.progress?.status).icon" class="h-3.5 w-3.5" />
+                      {{ statusConfig(item.progress?.status).label }}
+                    </span>
+                  </div>
+                  <div class="mt-3 grid gap-2 sm:grid-cols-3">
+                    <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                      <div class="text-[10px] uppercase tracking-wide text-slate-500">Presenca</div>
+                      <div class="mt-1 text-sm font-semibold text-slate-900">{{ item.progress?.attendance ?? '-' }}</div>
+                    </div>
+                    <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                      <div class="text-[10px] uppercase tracking-wide text-slate-500">Nota</div>
+                      <div class="mt-1 text-sm font-semibold text-slate-900">
+                        {{ item.progress?.exam !== undefined ? item.progress.exam.toFixed(1) : '-' }}
+                      </div>
+                    </div>
+                    <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                      <div class="text-[10px] uppercase tracking-wide text-slate-500">Lessons</div>
+                      <div class="mt-1 text-sm font-semibold text-slate-900">{{ item.progress?.lessons?.length ?? 0 }}</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </TabsContent>
+          </div>
+        </Tabs>
       </div>
     </div>
 
