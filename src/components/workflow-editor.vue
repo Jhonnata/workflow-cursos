@@ -315,6 +315,59 @@ function resetWorkflowState() {
 
 function normalizeWorkflowGraph(payload: any) {
   if (!payload) return { nodes: [], edges: [] }
+  const KNOWN_NODE_TYPES = new Set(['start', 'course', 'condition', 'comment'])
+  const normalizeNodeType = (value: unknown) => {
+    const raw = String(value ?? '')
+      .trim()
+      .toLowerCase()
+    if (!raw) return ''
+    if (raw === 'cond' || raw === 'if') return 'condition'
+    if (KNOWN_NODE_TYPES.has(raw)) return raw
+    return ''
+  }
+  const inferNodeTypeByNodeKey = (nodeKey: string) => {
+    const key = String(nodeKey || '')
+      .trim()
+      .toLowerCase()
+    if (!key) return ''
+    if (key === START_NODE_ID || key.startsWith('start')) return 'start'
+    if (key.startsWith('course:')) return 'course'
+    if (key.startsWith('cond:') || key.startsWith('condition:')) return 'condition'
+    if (key.startsWith('comment:')) return 'comment'
+    return ''
+  }
+  const inferNodeTypeByPayload = (payloadValue: any) => {
+    const nodePayload = payloadValue && typeof payloadValue === 'object' ? payloadValue : {}
+    if (
+      nodePayload.executionMode !== undefined ||
+      nodePayload.runDailyAt !== undefined ||
+      nodePayload.runIntervalMinutes !== undefined
+    ) {
+      return 'start'
+    }
+    if (
+      nodePayload.courseId !== undefined ||
+      nodePayload.courseName !== undefined ||
+      Array.isArray(nodePayload.classes)
+    ) {
+      return 'course'
+    }
+    if (
+      nodePayload.minAttendance !== undefined ||
+      nodePayload.minExamGrade !== undefined ||
+      nodePayload.classInsertStatus !== undefined ||
+      nodePayload.classExitStatus !== undefined
+    ) {
+      return 'condition'
+    }
+    if (nodePayload.text !== undefined) return 'comment'
+    return ''
+  }
+  const resolveNodeType = (item: any, nodeKey: string, nodePayload: any) =>
+    normalizeNodeType(item?.type) ||
+    inferNodeTypeByNodeKey(nodeKey) ||
+    inferNodeTypeByPayload(nodePayload) ||
+    'comment'
   const parseMaybeJson = (value: any) => {
     if (typeof value !== 'string') return value
     const trimmed = value.trim()
@@ -333,16 +386,22 @@ function normalizeWorkflowGraph(payload: any) {
     items
       .map((item) => {
         if (!item) return null
-        const data = parseMaybeJson(item.payloadJson) ?? {}
-        const baseData = data?.payload ? data : { payload: data || {}, nodeId: item.nodeKey }
+        const nodeKey = String(item.nodeKey ?? item.node_key ?? item.id ?? '').trim()
+        const data = parseMaybeJson(item.payloadJson ?? item.payload_json) ?? {}
+        const baseData = data?.payload ? data : { payload: data || {}, nodeId: nodeKey || String(item.id) }
+        const nodePayload = baseData?.payload ?? {}
+        const nodeType = resolveNodeType(item, nodeKey, nodePayload)
         return {
-          id: item.nodeKey ?? String(item.id),
-          type: item.type,
-          position: { x: toNumber(item.positionX) || 0, y: toNumber(item.positionY) || 0 },
+          id: nodeKey || String(item.id),
+          type: nodeType,
+          position: {
+            x: toNumber(item.positionX ?? item.position_x) || 0,
+            y: toNumber(item.positionY ?? item.position_y) || 0
+          },
           data: {
             ...(baseData || {}),
             connectMode: baseData?.connectMode ?? false,
-            nodeId: item.nodeKey ?? baseData?.nodeId ?? String(item.id)
+            nodeId: nodeKey || baseData?.nodeId || String(item.id)
           }
         }
       })

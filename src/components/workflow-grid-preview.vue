@@ -12,6 +12,7 @@ import {
   CheckCircle2,
   AlertCircle,
   Clock,
+  Pencil,
   BookOpen,
   ChevronLeft,
   RefreshCw
@@ -20,6 +21,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useToast } from '@/components/ui/toast'
+import ConditionConfigForm from '@/components/condition-config-form.vue'
 import { onlyWithContractFlag } from '@/lib/workflow'
 import type { ConditionPayload } from '@/lib/workflow'
 import { api } from '@/lib/api'
@@ -106,6 +108,8 @@ type ApiStep = {
     byCondition?: { nodeKey?: string; eligible?: boolean; reasons?: string[] }[]
   }
   lessons?: ApiLesson[]
+  themes?: ApiLesson[]
+  topics?: ApiLesson[]
 }
 
 type ApiLesson = {
@@ -1136,13 +1140,16 @@ const { toast } = useToast()
 
 function normalizeLessonList(lessons: unknown) {
   if (!Array.isArray(lessons)) return []
-  return lessons.map((item) => ({
-    lesson: (item as any)?.lesson,
-    activated: (item as any)?.activated,
-    name: String((item as any)?.name || ''),
-    attendance: (item as any)?.attendance ?? null,
-    concluded: (item as any)?.concluded ?? null
-  }))
+  return lessons.map((item, idx) => {
+    const raw = (item || {}) as Record<string, any>
+    return {
+      lesson: raw.lesson ?? raw.id ?? raw.topicId ?? raw.themeId ?? idx + 1,
+      activated: raw.activated ?? raw.active ?? raw.enabled ?? raw.isActive,
+      name: String(raw.name ?? raw.title ?? raw.topic ?? raw.theme ?? raw.lessonName ?? ''),
+      attendance: raw.attendance ?? raw.presence ?? raw.attended ?? null,
+      concluded: raw.concluded ?? raw.completed ?? raw.done ?? null
+    }
+  })
 }
 
 function toFlagLabel(value: unknown) {
@@ -1166,6 +1173,18 @@ function isTruthyFlag(value: unknown) {
 function lessonAttendanceLabel(lesson: ApiLesson) {
   if (!isTruthyFlag(lesson?.concluded)) return '-'
   return isTruthyFlag(lesson?.attendance) ? 'Presente' : 'Ausente'
+}
+
+function lessonTopicLabel(lesson: ApiLesson, idx: number) {
+  const explicit = String(lesson?.name || '').trim()
+  if (explicit) return explicit
+  const code = String(lesson?.lesson ?? '').trim()
+  if (code) return `Tema ${code}`
+  return `Tema ${idx + 1}`
+}
+
+function lessonConcludedLabel(lesson: ApiLesson) {
+  return isTruthyFlag(lesson?.concluded) ? 'Concluido' : 'Pendente'
 }
 
 function openLessons(row: RowItem, course: CourseSeqItem) {
@@ -1400,14 +1419,14 @@ function detailSteps(row: RowItem): DetailStepItem[] {
         order: step.order ?? index + 1,
         nodeKey: String(step.nodeKey || ''),
         label: String(step.courseName || `Etapa ${index + 1}`),
-        progress: {
-          classId: step.classId,
-          className: String(step.class?.name ?? step.className ?? '').trim() || undefined,
-          classNodeKey: String(step.class?.nodeKey ?? step.classNodeKey ?? '').trim() || undefined,
-          status: step.status ?? undefined,
-          lessons: normalizeLessonList(step.lessons)
-        } as ProgressItem
-      }))
+          progress: {
+            classId: step.classId,
+            className: String(step.class?.name ?? step.className ?? '').trim() || undefined,
+            classNodeKey: String(step.class?.nodeKey ?? step.classNodeKey ?? '').trim() || undefined,
+            status: step.status ?? undefined,
+            lessons: normalizeLessonList(step.lessons ?? step.themes ?? step.topics)
+          } as ProgressItem
+        }))
   }
   return courseSeq.value.map((course, index) => {
     const progress = getProgress(row, course)
@@ -1594,7 +1613,7 @@ async function loadApprenticeWorkflows() {
             (stats as any).overall_performance
         )
         const eligibility = step?.eligibility || {}
-        const lessons = normalizeLessonList(step?.lessons)
+        const lessons = normalizeLessonList(step?.lessons ?? step?.themes ?? step?.topics)
         const entry = {
           classId: Number.isFinite(Number(classId)) ? Number(classId) : undefined,
           className,
@@ -2018,6 +2037,19 @@ function closeEdit() {
   edit.value = null
 }
 
+async function onEditConditionNodeChange(nodeKey: string) {
+  if (!edit.value) return
+  const nextNodeKey = String(nodeKey || '').trim() || null
+  edit.value = {
+    ...edit.value,
+    conditionNodeKey: nextNodeKey,
+    overrideId: null,
+    value: enforceEditContractRequirement({ ...edit.value.value }, nextNodeKey)
+  }
+  await loadOverrideMetaForEdit()
+  await loadResolvedConditionForEdit()
+}
+
 function updateEditFields(patch: Partial<EditValue>) {
   if (!edit.value) return
   edit.value = { ...edit.value, value: { ...edit.value.value, ...patch } }
@@ -2363,9 +2395,9 @@ void _keepForTypecheck
             </div>
           </button>
 
-          <div v-show="isExpanded(r.id)" class="border-t border-slate-100 bg-[#fafbfc] px-4 py-3">
-            <div class="flex w-max gap-3">
-              <div v-for="(c, idx) in courseSeq" :key="`${r.id}:${c.nodeId}`" class="w-[200px]">
+          <div v-show="isExpanded(r.id)" class="overflow-x-hidden border-t border-slate-100 bg-[#fafbfc] px-4 py-3">
+            <div class="grid w-full grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+              <div v-for="(c, idx) in courseSeq" :key="`${r.id}:${c.nodeId}`" class="min-w-0">
                 <div class="mb-1.5 flex items-center gap-1.5">
                   <div class="flex h-5 w-5 items-center justify-center rounded-[5px] bg-slate-800">
                     <span class="text-[9px] font-extrabold text-white">{{ idx + 1 }}</span>
@@ -2374,8 +2406,65 @@ void _keepForTypecheck
                 </div>
                 <template v-if="getProgress(r, c)">
                   <div class="rounded-[10px] border border-[#e8edf3] bg-white p-3 shadow-sm">
-                    <div class="truncate text-[11px] font-bold text-slate-800">
-                      {{ getProgress(r, c)?.className || '-' }}
+                    <div class="flex items-start justify-between gap-2">
+                      <div class="min-w-0">
+                        <div class="truncate text-[11px] font-bold text-slate-800">
+                          {{ getProgress(r, c)?.className || '-' }}
+                        </div>
+                        <div class="mt-0.5 flex items-center gap-1">
+                          <span
+                            v-if="!getProgress(r, c)?.isFinalStep"
+                            class="inline-flex items-center rounded-full border px-1.5 py-0.5 text-[9px] font-semibold"
+                            :class="
+                              getProgress(r, c)?.eligibilityAny === true
+                                ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                                : 'border-amber-200 bg-amber-50 text-amber-700'
+                            "
+                          >
+                            {{ getProgress(r, c)?.eligibilityAny === true ? 'Elegivel' : 'Aguardando regra' }}
+                          </span>
+                          <span
+                            v-else
+                            class="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-700"
+                          >
+                            {{ finalStepLabel(getProgress(r, c)) }}
+                          </span>
+                        </div>
+                      </div>
+                      <div class="flex items-center gap-1">
+                        <button
+                          type="button"
+                          class="inline-flex h-7 items-center justify-center rounded-[7px] border border-slate-200 bg-white px-2 text-[10px] font-semibold text-slate-600 disabled:opacity-50"
+                          :title="(getProgress(r, c)?.lessons || []).length > 0 ? 'Ver temas da etapa' : 'Sem temas cadastrados'"
+                          :disabled="(getProgress(r, c)?.lessons || []).length === 0"
+                          @click.stop="openLessons(r, c)"
+                        >
+                          <BookOpen class="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          v-if="!getProgress(r, c)?.isFinalStep"
+                          type="button"
+                          class="inline-flex h-7 items-center justify-center rounded-[7px] border border-slate-200 bg-white px-2 text-[10px] font-semibold text-slate-600 disabled:opacity-50"
+                          title="Editar condicao de evolucao"
+                          :disabled="conditionOptionsForCourse(c).length === 0"
+                          @click.stop="openEdit(r, c)"
+                        >
+                          <Pencil class="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          v-if="!getProgress(r, c)?.isFinalStep"
+                          type="button"
+                          class="inline-flex h-7 items-center justify-center rounded-[7px] border border-slate-200 bg-white px-2 text-[10px] font-semibold text-slate-600 disabled:opacity-50"
+                          title="Evoluir etapa manualmente"
+                          :disabled="!canManualEvolute(r, c) || evolvingStepKey === evolutionStepKey(r.id, c.nodeId)"
+                          @click.stop="evoluteStep(r, c)"
+                        >
+                          <RefreshCw
+                            class="h-3.5 w-3.5"
+                            :class="evolvingStepKey === evolutionStepKey(r.id, c.nodeId) ? 'animate-spin' : ''"
+                          />
+                        </button>
+                      </div>
                     </div>
                     <div class="mt-1">
                       <span
@@ -2782,6 +2871,128 @@ void _keepForTypecheck
               </div>
               <div class="mt-1.5 text-[11px] text-slate-400">{{ detailRunSummary(transition) }}</div>
             </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="lessonsModal.open" class="absolute inset-0 z-30">
+      <div class="absolute inset-0 bg-black/30 backdrop-blur-sm" @click="closeLessonsModal" />
+      <div
+        class="absolute left-1/2 top-1/2 flex w-[min(760px,92vw)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-2xl border bg-white shadow-2xl"
+      >
+        <div class="flex items-center justify-between border-b px-4 py-3">
+          <div>
+            <div class="text-sm font-bold text-slate-900">Temas da etapa</div>
+            <div class="text-xs text-slate-600">{{ lessonsModal.apprenticeName }} • {{ lessonsModal.courseName }}</div>
+          </div>
+          <Button size="icon" variant="ghost" class="h-8 w-8" @click="closeLessonsModal">
+            <X class="h-4 w-4" />
+          </Button>
+        </div>
+        <div class="max-h-[65vh] overflow-auto p-4">
+          <div
+            v-if="lessonsModal.lessons.length === 0"
+            class="rounded-xl border border-dashed bg-slate-50 p-6 text-center text-xs text-slate-500"
+          >
+            Nenhum tema encontrado para esta etapa.
+          </div>
+          <div v-else class="space-y-2">
+            <div
+              v-for="(lesson, lessonIdx) in lessonsModal.lessons"
+              :key="`lesson-modal:${String(lesson.lesson || lessonIdx)}-${lessonIdx}`"
+              class="rounded-xl border border-slate-200 bg-slate-50/40 p-3"
+            >
+              <div class="flex items-center justify-between gap-3">
+                <div class="min-w-0">
+                  <div class="truncate text-sm font-semibold text-slate-900">
+                    {{ lessonTopicLabel(lesson, lessonIdx) }}
+                  </div>
+                  <div class="text-[11px] text-slate-500">ID: {{ lesson.lesson ?? '-' }}</div>
+                </div>
+                <span
+                  class="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold"
+                  :class="
+                    lessonConcludedLabel(lesson) === 'Concluido'
+                      ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                      : 'border-amber-200 bg-amber-50 text-amber-700'
+                  "
+                >
+                  {{ lessonConcludedLabel(lesson) }}
+                </span>
+              </div>
+              <div class="mt-2 grid grid-cols-1 gap-2 text-[11px] sm:grid-cols-2">
+                <div class="rounded-lg border border-slate-200 bg-white px-2 py-1.5">
+                  <span class="text-slate-500">Frequencia:</span>
+                  <span class="ml-1 font-semibold text-slate-900">{{ lessonAttendanceLabel(lesson) }}</span>
+                </div>
+                <div class="rounded-lg border border-slate-200 bg-white px-2 py-1.5">
+                  <span class="text-slate-500">Ativa:</span>
+                  <span class="ml-1 font-semibold text-slate-900">{{ toFlagLabel(lesson.activated) }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="edit" class="absolute inset-0 z-40">
+      <div class="absolute inset-0 bg-black/30 backdrop-blur-sm" @click="closeEdit" />
+      <div class="absolute right-0 top-0 h-full w-[420px] overflow-auto border-l bg-white shadow-2xl">
+        <div class="sticky top-0 z-10 flex items-center justify-between border-b bg-gradient-to-br from-blue-50 to-white p-5">
+          <div class="min-w-0">
+            <div class="mb-1 truncate text-sm font-bold text-slate-900">Configurar evolucao do aprendiz</div>
+            <div class="truncate text-xs text-slate-600">Aprendiz #{{ edit.rowId }} • {{ edit.courseName }}</div>
+          </div>
+          <Button size="icon" variant="ghost" class="h-8 w-8" @click="closeEdit">
+            <X class="h-4 w-4" />
+          </Button>
+        </div>
+
+        <div class="space-y-4 p-5">
+          <div v-if="edit.conditionOptions.length > 1" class="space-y-1">
+            <label class="text-[11px] font-semibold uppercase tracking-[0.04em] text-slate-500">Condicao</label>
+            <select
+              class="h-9 w-full rounded-[8px] border border-slate-200 bg-white px-2 text-[12px] text-slate-700"
+              :value="edit.conditionNodeKey || ''"
+              @change="onEditConditionNodeChange(($event.target as HTMLSelectElement).value)"
+            >
+              <option v-for="opt in edit.conditionOptions" :key="`edit-cond:${opt.nodeKey}`" :value="opt.nodeKey">
+                {{ opt.label }}
+              </option>
+            </select>
+          </div>
+
+          <div
+            v-if="!edit.conditionNodeKey"
+            class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-[11px] font-medium text-amber-800"
+          >
+            Nenhuma condicao conectada para esta etapa. Nao ha o que editar.
+          </div>
+
+          <ConditionConfigForm
+            v-else
+            :value="edit.value"
+            :requires-contract="editRequiresContract"
+            id-prefix="apprentice-override"
+            @update="handleConditionPatch"
+          />
+
+          <div class="flex items-center gap-2 pt-2">
+            <Button variant="outline" class="flex-1" @click="closeEdit">Cancelar</Button>
+            <Button
+              class="flex-1 bg-blue-600 hover:bg-blue-700"
+              :disabled="!edit.conditionNodeKey"
+              @click="saveEdit"
+            >
+              <CheckCircle2 class="mr-1.5 h-4 w-4" />
+              Salvar
+            </Button>
+          </div>
+
+          <div class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-[10px] text-amber-800">
+            <strong>Nota:</strong> Esta edicao e especifica para este aprendiz e sobrescreve a condicao padrao.
           </div>
         </div>
       </div>
