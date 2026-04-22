@@ -1,6 +1,6 @@
 import { mockCatalog } from './workflow'
 import { API_BASE_URL } from './config'
-import { getValidStoredAuthOrLogout, logoutForExpiredSession } from './auth'
+import { getValidStoredAuthOrLogout, isJwtExpired, logoutForExpiredSession } from './auth'
 
 const BASE_URL = API_BASE_URL
 
@@ -16,12 +16,6 @@ async function tryFetch(url: string, options?: RequestInit, fallbackData?: any) 
     }
     const res = await fetch(url, { ...options, headers })
     if (!res.ok) {
-      if (res.status === 401) {
-        logoutForExpiredSession()
-        const unauthorized = new Error('Sessao expirada. Realize login novamente.')
-        ;(unauthorized as any).status = 401
-        throw unauthorized
-      }
       const contentType = res.headers.get('content-type') || ''
       let payload: any = null
       if (contentType.includes('application/json')) {
@@ -29,8 +23,30 @@ async function tryFetch(url: string, options?: RequestInit, fallbackData?: any) 
       } else {
         payload = await res.text().catch(() => null)
       }
-      const message =
+      const payloadMessage =
         (payload && typeof payload === 'object' && 'message' in payload && String(payload.message)) ||
+        (typeof payload === 'string' ? payload : '')
+      if (res.status === 401) {
+        const messageKey = String(payloadMessage || '').toLowerCase()
+        const explicitExpired =
+          messageKey.includes('expir') ||
+          messageKey.includes('jwt expired') ||
+          messageKey.includes('token expired')
+        const explicitInvalidToken =
+          messageKey.includes('invalid token') ||
+          messageKey.includes('token invalido') ||
+          messageKey.includes('token inválido')
+        const shouldLogout = Boolean((auth?.token && isJwtExpired(auth.token, 0)) || explicitExpired || explicitInvalidToken)
+        if (shouldLogout) logoutForExpiredSession()
+        const unauthorized = new Error(
+          shouldLogout ? 'Sessao expirada. Realize login novamente.' : payloadMessage || 'Nao autorizado para esta operacao.',
+        )
+        ;(unauthorized as any).status = 401
+        ;(unauthorized as any).payload = payload
+        throw unauthorized
+      }
+      const message =
+        payloadMessage ||
         `HTTP error! status: ${res.status}`
       const error = new Error(message)
       ;(error as any).status = res.status
