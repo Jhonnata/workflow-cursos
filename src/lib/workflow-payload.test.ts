@@ -12,7 +12,8 @@ function startNode() {
         startDate: '2026-01-01',
         endDate: '2026-12-31',
         runDailyAt: '08:00',
-        runIntervalMinutes: null
+        runIntervalMinutes: null,
+        classStatus: 'inProgress'
       }
     }
   }
@@ -218,4 +219,3 @@ describe('workflow payload', () => {
     })
   })
 })
-

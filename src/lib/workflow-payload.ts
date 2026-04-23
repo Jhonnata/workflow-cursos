@@ -40,6 +40,7 @@ export type CanonicalStartPayload = {
   endDate: string
   runDailyAt: string
   runIntervalMinutes: number | null
+  classStatus: string
 }
 
 export type CanonicalCoursePayload = {
@@ -182,6 +183,19 @@ function normalizeExecutionMode(value: unknown): WorkflowExecutionMode | null {
   return value === 'recurring' ? 'recurring' : value === 'once' ? 'once' : null
 }
 
+function normalizeStartClassStatus(value: unknown) {
+  const key = String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[\s_]+/g, '')
+  if (key === 'inprogress' || key === 'emandamento') return 'inProgress'
+  if (key === 'incomplete' || key === 'incompleto') return 'incomplete'
+  if (key === 'conclude' || key === 'concluded' || key === 'concluido' || key === 'completed') return 'conclude'
+  return 'inProgress'
+}
+
 function normalizeConditionEvolutionMode(value: unknown): ConditionPayload['evolutionMode'] {
   if (value === 'specific' || value === 'range' || value === 'classEnd' || value === 'none') return value
   return 'none'
@@ -248,7 +262,8 @@ function sanitizeStartPayload(payload?: Record<string, any> | null): CanonicalSt
     startDate: toText(payload?.startDate),
     endDate: toText(payload?.endDate),
     runDailyAt: toText(payload?.runDailyAt),
-    runIntervalMinutes: toNullableNumber(payload?.runIntervalMinutes)
+    runIntervalMinutes: toNullableNumber(payload?.runIntervalMinutes),
+    classStatus: normalizeStartClassStatus(payload?.classStatus ?? payload?.class_status ?? payload?.status)
   }
 }
 

@@ -1118,6 +1118,8 @@ const transitionsLimit = ref<0 | 5 | 10 | 20>(5)
 const runId = ref('')
 const hasLoadedRows = ref(false)
 const totalCount = ref(0)
+const totalTracked = ref(0)
+const totalInProgress = ref(0)
 const pageLimit = ref(10)
 const pageOffset = ref(0)
 const isRunningEvolution = ref(false)
@@ -1533,6 +1535,14 @@ function formatApiError(e: unknown) {
   return messageFromError || 'Erro inesperado.'
 }
 
+function parseCount(...candidates: unknown[]) {
+  for (const item of candidates) {
+    const n = Number(item)
+    if (Number.isFinite(n) && n >= 0) return Math.trunc(n)
+  }
+  return null
+}
+
 async function loadApprenticeWorkflows() {
   if (props.workflowId === undefined || props.workflowId === null || props.workflowId === '') {
     rows.value = []
@@ -1554,6 +1564,8 @@ async function loadApprenticeWorkflows() {
       ? payload
       : Array.isArray(payload?.data)
         ? payload.data
+        : Array.isArray(payload?.data?.data)
+          ? payload.data.data
         : payload?.apprenticeId || payload?.workflowMembership || payload?.steps || payload?.preferredContract
           ? [payload]
           : payload?.data?.apprenticeId ||
@@ -1562,7 +1574,22 @@ async function loadApprenticeWorkflows() {
               payload?.data?.preferredContract
             ? [payload.data]
             : []
-    totalCount.value = Number(payload?.total ?? payload?.data?.total ?? list.length ?? 0) || 0
+    totalCount.value =
+      parseCount(payload?.total, payload?.data?.total, payload?.meta?.total, payload?.pagination?.total, list.length) || 0
+    const trackedCount = parseCount(
+      payload?.totalTracked,
+      payload?.total_tracked,
+      payload?.data?.totalTracked,
+      payload?.data?.total_tracked
+    )
+    const inProgressCount = parseCount(
+      payload?.totalInProgress,
+      payload?.total_in_progress,
+      payload?.data?.totalInProgress,
+      payload?.data?.total_in_progress
+    )
+    totalTracked.value = trackedCount ?? totalCount.value
+    totalInProgress.value = inProgressCount ?? 0
     const maxOffset = totalCount.value > 0 ? Math.floor((totalCount.value - 1) / pageLimit.value) * pageLimit.value : 0
     if (pageOffset.value > maxOffset) {
       pageOffset.value = maxOffset
@@ -1669,10 +1696,18 @@ async function loadApprenticeWorkflows() {
         workflowMembership
       }
     })
+    if (trackedCount === null) {
+      totalTracked.value = Math.max(totalCount.value, rows.value.length)
+    }
+    if (inProgressCount === null) {
+      totalInProgress.value = rows.value.filter((row) => isInProgressStatus(row.workflowMembership?.status)).length
+    }
   } catch (e) {
     console.error('Erro ao buscar workflows/{id}/apprentices', e)
     rows.value = []
     totalCount.value = 0
+    totalTracked.value = 0
+    totalInProgress.value = 0
   } finally {
     hasLoadedRows.value = true
   }
@@ -1705,6 +1740,8 @@ watch(
     hasLoadedRows.value = false
     rows.value = []
     totalCount.value = 0
+    totalTracked.value = 0
+    totalInProgress.value = 0
     pageOffset.value = 0
     loadApprenticeWorkflows()
   }
@@ -1771,19 +1808,6 @@ const totalPages = computed(() => {
 const currentPage = computed(() => Math.min(totalPages.value, Math.floor(pageOffset.value / pageLimit.value) + 1))
 const pageStart = computed(() => (totalCount.value === 0 ? 0 : pageOffset.value + 1))
 const pageEnd = computed(() => Math.min(pageOffset.value + rows.value.length, totalCount.value))
-const totalCompletedOnPage = computed(
-  () =>
-    rows.value.filter((row) => {
-      const key = String(row.workflowMembership?.status || '')
-        .trim()
-        .toLowerCase()
-        .replace(/[\s_-]+/g, '')
-      return ['completed', 'concluded', 'concluido', 'done'].includes(key)
-    }).length
-)
-const totalInProgressOnPage = computed(
-  () => rows.value.filter((row) => isInProgressStatus(row.workflowMembership?.status)).length
-)
 const visiblePages = computed(() => {
   const pages: number[] = []
   const total = totalPages.value
@@ -2233,15 +2257,11 @@ void _keepForTypecheck
       <div class="mb-3 flex flex-wrap items-center gap-2">
         <span
           class="inline-flex items-center gap-1.5 rounded-full border border-blue-300 bg-blue-50 px-3 py-1 text-[11px] font-bold text-blue-700"
-          ><span class="h-1.5 w-1.5 rounded-full bg-blue-500" />{{ totalCount }} total</span
-        >
-        <span
-          class="inline-flex items-center gap-1.5 rounded-full border border-emerald-300 bg-emerald-50 px-3 py-1 text-[11px] font-bold text-emerald-700"
-          ><span class="h-1.5 w-1.5 rounded-full bg-emerald-500" />{{ totalCompletedOnPage }} concluídos</span
+          ><span class="h-1.5 w-1.5 rounded-full bg-blue-500" />{{ totalTracked }} acompanhados</span
         >
         <span
           class="inline-flex items-center gap-1.5 rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-[11px] font-bold text-blue-700"
-          ><span class="h-1.5 w-1.5 rounded-full bg-blue-400" />{{ totalInProgressOnPage }} em andamento</span
+          ><span class="h-1.5 w-1.5 rounded-full bg-blue-400" />{{ totalInProgress }} em andamento</span
         >
       </div>
 

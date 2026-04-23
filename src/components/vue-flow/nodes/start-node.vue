@@ -3,7 +3,7 @@ import { Position, type NodeProps } from '@vue-flow/core'
 import { Play, Trash2 } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import PortDotHandle from '@/components/vue-flow/port-dot-handle.vue'
-import type { StartNodeData } from '@/lib/workflow'
+import { classInsertStatusLabel, type StartNodeData } from '@/lib/workflow'
 
 defineProps<NodeProps<StartNodeData>>()
 </script>
@@ -32,6 +32,9 @@ defineProps<NodeProps<StartNodeData>>()
           <div class="min-w-0">
             <div class="text-sm font-semibold text-emerald-900 truncate">Inicio</div>
             <div class="text-[11px] text-emerald-700">Start</div>
+            <div class="text-[10px] text-emerald-700/80 truncate">
+              Status: {{ classInsertStatusLabel(data?.payload?.classStatus) || '-' }}
+            </div>
           </div>
         </div>
 

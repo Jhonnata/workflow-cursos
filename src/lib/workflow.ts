@@ -90,6 +90,7 @@ export type StartPayload = {
   endDate: string
   runDailyAt: string
   runIntervalMinutes: number | null
+  classStatus: string
 }
 
 export const START_NODE_ID = 'start'
@@ -110,6 +111,8 @@ export const CLASS_INSERT_STATUS_OPTIONS = [
   { value: 'incomplete', label: 'Incompleto' },
   { value: 'conclude', label: 'Concluido' }
 ] as const
+
+export const CLASS_STATUS_OPTIONS = CLASS_INSERT_STATUS_OPTIONS
 
 export const EXECUTION_MODE_OPTIONS = [
   { value: 'recurring', label: 'Recorrente' },

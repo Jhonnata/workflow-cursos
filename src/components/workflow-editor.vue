@@ -46,6 +46,7 @@ import { useToast } from '@/components/ui/toast'
 import {
   buildCoursePayload,
   EXECUTION_MODE_OPTIONS,
+  CLASS_STATUS_OPTIONS,
   commentNodeId,
   conditionNodeId,
   courseNodeId,
@@ -756,7 +757,8 @@ function syncNodeMeta() {
           startDate: n.data?.payload?.startDate ?? '',
           endDate: n.data?.payload?.endDate ?? '',
           runDailyAt: n.data?.payload?.runDailyAt ?? '08:00',
-          runIntervalMinutes: n.data?.payload?.runIntervalMinutes ?? null
+          runIntervalMinutes: n.data?.payload?.runIntervalMinutes ?? null,
+          classStatus: n.data?.payload?.classStatus ?? n.data?.payload?.class_status ?? 'inProgress'
         }
       } else if (n.type === 'comment') {
         payload = {
@@ -870,7 +872,8 @@ function addStartNode(position?: { x: number; y: number }) {
         startDate: '',
         endDate: '',
         runDailyAt: '08:00',
-        runIntervalMinutes: null
+        runIntervalMinutes: null,
+        classStatus: 'inProgress'
       },
       connectMode: connectMode.value,
       onRemove: removeNode,
@@ -2459,6 +2462,26 @@ function updateSelectedStart(patch: Partial<StartPayload>) {
                         <span class="text-[11px] text-slate-900">{{ opt.label }}</span>
                       </label>
                     </div>
+                  </div>
+
+                  <div class="space-y-2 rounded-xl border p-3">
+                    <div>
+                      <div class="text-xs font-semibold">Status na Turma</div>
+                      <div class="text-[11px] text-muted-foreground">
+                        Somente jovens com este status entram no inicio da execucao.
+                      </div>
+                    </div>
+                    <select
+                      class="h-9 w-full rounded-md border border-slate-200 bg-white px-2 text-xs"
+                      :value="selectedNode.data?.payload?.classStatus || 'inProgress'"
+                      @change="
+                        (e) => updateSelectedStart({ classStatus: (e.target as HTMLSelectElement).value || 'inProgress' })
+                      "
+                    >
+                      <option v-for="opt in CLASS_STATUS_OPTIONS" :key="`start-class-status:${opt.value}`" :value="opt.value">
+                        {{ opt.label }}
+                      </option>
+                    </select>
                   </div>
 
                   <div class="space-y-2 rounded-xl border p-3">
