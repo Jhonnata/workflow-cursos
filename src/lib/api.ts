@@ -150,25 +150,15 @@ export const api = {
       contract?: string
       classId?: string | number
       classStatus?: string
+      hasContract?: boolean
+      contractMinMonths?: number
+      sort?: 'hasContract'
+      order?: 'asc' | 'desc'
       transitionsLimit?: number
     },
   ) {
     const id = encodeURIComponent(String(workflowId))
-    const search = new URLSearchParams()
-    if (params?.limit !== undefined) search.set('lmt', String(params.limit))
-    if (params?.offset !== undefined) search.set('offset', String(params.offset))
-    if (params?.q) search.set('q', String(params.q))
-    if (params?.contract) search.set('contract', String(params.contract))
-    if (params?.classId !== undefined && params?.classId !== null && params?.classId !== '') {
-      search.set('classId', String(params.classId))
-    }
-    if (params?.classStatus && params.classStatus !== 'all') {
-      search.set('classStatus', String(params.classStatus))
-    }
-    if (params?.transitionsLimit !== undefined && params.transitionsLimit !== null) {
-      search.set('transitionsLimit', String(params.transitionsLimit))
-    }
-    const suffix = search.toString()
+    const suffix = buildApprenticesQuery(params)
     return tryFetch(`${BASE_URL}/workflows/${id}/apprentices${suffix ? `?${suffix}` : ''}`, {}, [])
   },
   async listWorkflowOverrides(workflowId: string | number, apprenticeId?: string | number) {
@@ -250,6 +240,42 @@ export const api = {
       body: JSON.stringify(items),
     }, items)
   },
+}
+
+type ApprenticesFilters = {
+  page?: number
+  offset?: number
+  limit?: number
+  q?: string
+  classId?: number | string
+  classStatus?: 'inProgress' | 'concluded' | 'inactive' | 'incomplete' | 'all' | string
+  contract?: string
+  hasContract?: boolean
+  contractMinMonths?: number
+  sort?: 'hasContract'
+  order?: 'asc' | 'desc'
+  transitionsLimit?: number
+}
+
+function buildApprenticesQuery(f?: ApprenticesFilters) {
+  if (!f) return ''
+  const p = new URLSearchParams()
+  p.set('lmt', String(f.limit ?? 10))
+  p.set('offset', String(f.page ?? f.offset ?? 0))
+  if (f.q) p.set('q', f.q)
+  if (f.classId !== undefined && f.classId !== null && f.classId !== '') p.set('classId', String(f.classId))
+  if (f.classStatus && f.classStatus !== 'all') p.set('classStatus', f.classStatus)
+  if (f.contract) p.set('contract', f.contract)
+  if (typeof f.hasContract === 'boolean') p.set('hasContract', f.hasContract ? '1' : '0')
+  if (typeof f.contractMinMonths === 'number' && Number.isFinite(f.contractMinMonths)) {
+    p.set('contractMinMonths', String(f.contractMinMonths))
+  }
+  if (f.sort) p.set('sort', f.sort)
+  if (f.order) p.set('order', f.order)
+  if (typeof f.transitionsLimit === 'number' && Number.isFinite(f.transitionsLimit)) {
+    p.set('transitionsLimit', String(f.transitionsLimit))
+  }
+  return p.toString()
 }
 
 function normalizeArrayPayload(data: any, arrayKeys: string[] = []) {

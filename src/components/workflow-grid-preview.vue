@@ -45,26 +45,56 @@ type EditState = {
   value: EditValue
 }
 
+type ProgressByConditionItem = {
+  nodeKey: string
+  eligible: boolean
+  reasons: string[]
+  condition?: Partial<EditValue>
+  overrideData?: Partial<EditValue>
+  hasOverride?: boolean
+}
+
 type ProgressItem = {
   classId?: number
   className?: string
   classNodeKey?: string
+  conditionNodeKey?: string
   hasEnrollment?: boolean
   status?: string
   attendance?: number
   exam?: number
   evolveAt?: string
-  condition?: EditValue
+  condition?: Partial<EditValue>
   eligibleForNext?: boolean | null
   eligibleForNextReason?: string[]
   eligibilityAny?: boolean | null
   eligibilityReasons?: string[]
-  eligibilityByCondition?: { nodeKey: string; eligible: boolean; reasons: string[] }[]
+  eligibilityByCondition?: ProgressByConditionItem[]
   isFinalStep?: boolean
   lessons?: ApiLesson[]
 }
 
+type ApiByConditionItem = {
+  nodeKey?: string
+  conditionNodeKey?: string
+  condition_node_key?: string
+  eligible?: boolean | number | string | null
+  reasons?: string[]
+  condition?: Partial<EditValue> | Record<string, any> | string | null
+  override?:
+    | {
+        data?: Partial<EditValue> | Record<string, any> | string | null
+      }
+    | Record<string, any>
+    | string
+    | null
+  hasOverride?: boolean | number | string | null
+  has_override?: boolean | number | string | null
+}
+
 type RowContract = {
+  partnerId?: string
+  contractId?: string
   company: string
   start: string
   end: string
@@ -72,9 +102,9 @@ type RowContract = {
 }
 
 type ApiContract = {
-  partnerId?: number
+  partnerId?: number | string
   corporateName?: string
-  contractId?: number
+  contractId?: number | string
   startedAt?: string
   endedAt?: string | null
   status?: string
@@ -105,8 +135,15 @@ type ApiStep = {
   eligibility?: {
     anyEligible?: boolean | null
     reasons?: string[]
-    byCondition?: { nodeKey?: string; eligible?: boolean; reasons?: string[] }[]
+    byCondition?: ApiByConditionItem[]
   }
+  conditionNodeKey?: string
+  condition_node_key?: string
+  evolveAt?: string
+  evolve_at?: string
+  condition?: Partial<EditValue> | Record<string, any> | null
+  resolvedCondition?: Partial<EditValue> | Record<string, any> | null
+  resolved_condition?: Partial<EditValue> | Record<string, any> | null
   lessons?: ApiLesson[]
   themes?: ApiLesson[]
   topics?: ApiLesson[]
@@ -194,6 +231,7 @@ type RowItem = {
   cpf: string
   email: string
   contract: RowContract | null
+  contracts: RowContract[]
   progress: Record<string, ProgressItem>
   steps: ApiStep[]
   workflowMembership: WorkflowMembership | null
@@ -646,10 +684,39 @@ function isInProgressStatus(status?: string) {
   return ['current', 'inprogress', 'emandamento', 'ea'].includes(normalized)
 }
 
+function parseDateValue(value?: string) {
+  const raw = String(value || '').trim()
+  if (!raw) return null
+
+  const dateOnly = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (dateOnly) {
+    const year = Number(dateOnly[1])
+    const month = Number(dateOnly[2])
+    const day = Number(dateOnly[3])
+    const parsed = new Date(year, month - 1, day, 12, 0, 0)
+    return Number.isNaN(parsed.getTime()) ? null : parsed
+  }
+
+  const dateTimeLocal = raw.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/)
+  if (dateTimeLocal) {
+    const year = Number(dateTimeLocal[1])
+    const month = Number(dateTimeLocal[2])
+    const day = Number(dateTimeLocal[3])
+    const hour = Number(dateTimeLocal[4])
+    const minute = Number(dateTimeLocal[5])
+    const second = Number(dateTimeLocal[6] || '0')
+    const parsed = new Date(year, month - 1, day, hour, minute, second)
+    return Number.isNaN(parsed.getTime()) ? null : parsed
+  }
+
+  const parsed = new Date(raw)
+  return Number.isNaN(parsed.getTime()) ? null : parsed
+}
+
 function fmtDate(d?: string) {
   if (!d) return '-'
-  const date = new Date(d)
-  if (Number.isNaN(date.getTime())) return '-'
+  const date = parseDateValue(d)
+  if (!date) return '-'
   return date.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })
 }
 
@@ -667,8 +734,8 @@ function initials(name?: string) {
 
 function fmtLocalDateTime(value?: string) {
   if (!value) return '-'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return '-'
+  const date = parseDateValue(value)
+  if (!date) return '-'
   return date.toLocaleString('pt-BR', {
     day: '2-digit',
     month: 'short',
@@ -699,8 +766,8 @@ function runStatusConfig(status?: string) {
 
 function fmtDetailDateTime(value?: string) {
   if (!value) return '-'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return '-'
+  const date = parseDateValue(value)
+  if (!date) return '-'
   const datePart = date.toLocaleDateString('pt-BR', {
     day: '2-digit',
     month: 'short'
@@ -714,8 +781,8 @@ function fmtDetailDateTime(value?: string) {
 
 function fmtDateWithShortYear(value?: string) {
   if (!value) return '-'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return '-'
+  const date = parseDateValue(value)
+  if (!date) return '-'
   return date.toLocaleDateString('pt-BR', {
     day: '2-digit',
     month: 'short',
@@ -789,30 +856,61 @@ function detailRunSummary(transition: WorkflowMembershipTransition) {
 }
 
 function contractDurationLabel(start?: string, end?: string) {
-  if (!start) return ''
-  const startDate = new Date(start)
-  if (Number.isNaN(startDate.getTime())) return ''
-  const endDate = end ? new Date(end) : new Date()
-  if (Number.isNaN(endDate.getTime())) return ''
-  let months = (endDate.getFullYear() - startDate.getFullYear()) * 12 + (endDate.getMonth() - startDate.getMonth())
-  if (endDate.getDate() < startDate.getDate()) months -= 1
-  if (months < 0) months = 0
+  const months = contractDurationMonths(start, end)
+  if (months === null) return ''
   return `${months} meses`
 }
 
 function contractElapsedLabel(start?: string, end?: string) {
-  if (!start) return ''
-  const startDate = new Date(start)
-  if (Number.isNaN(startDate.getTime())) return ''
   const now = new Date()
-  const endDate = end ? new Date(end) : now
+  const endDate = end ? parseDateValue(end) : now
+  if (!endDate) return ''
   const effectiveEnd = endDate.getTime() < now.getTime() ? endDate : now
-  if (Number.isNaN(effectiveEnd.getTime())) return ''
-  let months =
-    (effectiveEnd.getFullYear() - startDate.getFullYear()) * 12 + (effectiveEnd.getMonth() - startDate.getMonth())
-  if (effectiveEnd.getDate() < startDate.getDate()) months -= 1
-  if (months < 0) months = 0
+  const months = contractDurationMonths(start, effectiveEnd.toISOString())
+  if (months === null) return ''
   return `${months} meses`
+}
+
+function contractDurationMonths(start?: string, end?: string) {
+  if (!start) return null
+  const startDate = parseDateValue(start)
+  if (!startDate) return null
+  const endDateRaw = end ? parseDateValue(end) : new Date()
+  if (!endDateRaw) return null
+  const normalizedStart = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate(), 12, 0, 0, 0)
+  const normalizedEnd = new Date(endDateRaw.getFullYear(), endDateRaw.getMonth(), endDateRaw.getDate(), 12, 0, 0, 0)
+  if (normalizedEnd.getTime() < normalizedStart.getTime()) return 0
+
+  let months =
+    (normalizedEnd.getFullYear() - normalizedStart.getFullYear()) * 12 +
+    (normalizedEnd.getMonth() - normalizedStart.getMonth())
+  let anchor = new Date(
+    normalizedStart.getFullYear(),
+    normalizedStart.getMonth() + months,
+    normalizedStart.getDate(),
+    12,
+    0,
+    0,
+    0
+  )
+  if (anchor.getTime() > normalizedEnd.getTime()) {
+    months -= 1
+    anchor = new Date(
+      normalizedStart.getFullYear(),
+      normalizedStart.getMonth() + months,
+      normalizedStart.getDate(),
+      12,
+      0,
+      0,
+      0
+    )
+  }
+  if (months < 0) months = 0
+
+  const MS_PER_DAY = 24 * 60 * 60 * 1000
+  const remainingDays = Math.max(0, Math.floor((normalizedEnd.getTime() - anchor.getTime()) / MS_PER_DAY))
+  if (remainingDays > 15) months += 1
+  return months
 }
 
 function formatDayOfWeek(value?: string | null) {
@@ -881,6 +979,55 @@ function evolutionLabel(item?: ProgressItem) {
   return fmtDate(item?.evolveAt)
 }
 
+function fmtDateNumeric(value?: string) {
+  if (!value) return ''
+  const date = parseDateValue(value)
+  if (!date) return ''
+  return date.toLocaleDateString('pt-BR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric'
+  })
+}
+
+function selectedByCondition(item?: ProgressItem) {
+  const list = item?.eligibilityByCondition || []
+  if (!Array.isArray(list) || list.length === 0) return undefined
+  const key = String(item?.conditionNodeKey || '').trim()
+  if (key) {
+    const exact = list.find((entry) => String(entry?.nodeKey || '').trim() === key)
+    if (exact) return exact
+  }
+  if (list.length === 1) return list[0]
+  return list[0]
+}
+
+function appliedCondition(item?: ProgressItem) {
+  return selectedByCondition(item)?.condition ?? item?.condition
+}
+
+function specificEvolutionDate(item?: ProgressItem) {
+  if (!item) return ''
+  const cond = appliedCondition(item)
+  const mode =
+    cond?.evolutionMode ??
+    (cond?.useClassEndDate ? 'classEnd' : cond?.evolveAt ? 'specific' : cond?.startDate || cond?.endDate ? 'range' : 'none')
+  if (mode !== 'specific') return ''
+  return fmtDateNumeric(cond?.evolveAt || item?.evolveAt)
+}
+
+function hasConditionOverride(item?: ProgressItem) {
+  const selected = selectedByCondition(item)
+  if (selected) return selected.hasOverride === true
+  return toOptionalBoolean((item?.condition as any)?.hasOverride) === true
+}
+
+function overrideEvolutionDate(item?: ProgressItem) {
+  const selected = selectedByCondition(item)
+  if (!selected) return ''
+  return fmtDateNumeric(selected.overrideData?.evolveAt)
+}
+
 function balanceStrategyLabel(item?: ProgressItem) {
   const strategies = item?.condition?.balanceStrategy || []
   if (!Array.isArray(strategies) || strategies.length === 0) return 'Menor Lotação'
@@ -941,6 +1088,34 @@ function parseHandleClassId(handle?: string | null) {
   return Number.isFinite(id) ? id : null
 }
 
+function resolveStepConditionNodeKey(step: ApiStep, byConditions: ProgressByConditionItem[], fromClass?: number) {
+  const candidates = byConditions
+    .map((item) => String(item.nodeKey || '').trim())
+    .filter(Boolean)
+  if (candidates.length === 0) return undefined
+
+  const explicitNodeKey = String(step?.conditionNodeKey ?? step?.condition_node_key ?? '').trim()
+  if (explicitNodeKey && candidates.includes(explicitNodeKey)) return explicitNodeKey
+
+  const classNodeKey = String(step?.classNodeKey ?? step?.class?.nodeKey ?? '').trim()
+  if (classNodeKey && candidates.includes(classNodeKey)) return classNodeKey
+
+  const courseNodeKey = String(step?.nodeKey || '').trim()
+  if (courseNodeKey) {
+    const byEdge = candidates.find((conditionNodeKey) =>
+      (props.edges || []).some((edge) => {
+        if (edge.source !== courseNodeKey || edge.target !== conditionNodeKey) return false
+        if (String(edge.targetHandle || '') !== 'if-in') return false
+        if (!Number.isFinite(fromClass)) return true
+        return parseHandleClassId(edge.sourceHandle) === Number(fromClass)
+      })
+    )
+    if (byEdge) return byEdge
+  }
+
+  return candidates[0]
+}
+
 function resolveClassIdByCourseAndName(courseNodeId: string, className?: string) {
   const name = String(className || '').trim()
   if (!name) return null
@@ -955,7 +1130,7 @@ function conditionKeyForEvolution(course: CourseSeqItem, progress?: ProgressItem
   const options = conditionOptionsForCourse(course)
   if (options.length === 0) return null
   const fromClass = Number(progress?.classId)
-  const progressConditionKey = String(progress?.classNodeKey || '').trim()
+  const progressConditionKey = String(progress?.conditionNodeKey || progress?.classNodeKey || '').trim()
   if (progressConditionKey) {
     const exists = options.some((opt) => opt.nodeKey === progressConditionKey)
     if (exists) return progressConditionKey
@@ -1113,13 +1288,17 @@ const classMetaByName = computed(() => {
 const rows = ref<RowItem[]>([])
 const edit = ref<EditState | null>(null)
 const searchQuery = ref('')
-const classStatusFilter = ref<'inProgress' | 'concluded' | 'incomplete' | 'all'>('all')
+const classStatusFilter = ref<'inProgress' | 'concluded' | 'inactive' | 'all'>('all')
+const hasContractFilter = ref<'all' | 'with' | 'without'>('all')
+const contractMinMonthsFilter = ref('')
+const sortHasContractFirst = ref(false)
 const transitionsLimit = ref<0 | 5 | 10 | 20>(5)
 const runId = ref('')
 const hasLoadedRows = ref(false)
 const totalCount = ref(0)
 const totalTracked = ref(0)
 const totalInProgress = ref(0)
+const localConditionPreviewByStep = ref<Record<string, Partial<EditValue>>>({})
 const pageLimit = ref(10)
 const pageOffset = ref(0)
 const isRunningEvolution = ref(false)
@@ -1137,6 +1316,17 @@ const lessonsModal = ref<{
   courseName: '',
   lessons: []
 })
+const contractsModal = ref<{
+  open: boolean
+  apprenticeName: string
+  contracts: RowContract[]
+  preferredKey: string
+}>({
+  open: false,
+  apprenticeName: '',
+  contracts: [],
+  preferredKey: ''
+})
 let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null
 const { toast } = useToast()
 
@@ -1152,6 +1342,77 @@ function normalizeLessonList(lessons: unknown) {
       concluded: raw.concluded ?? raw.completed ?? raw.done ?? null
     }
   })
+}
+
+function toRecordObject(value: unknown): Record<string, any> | null {
+  if (!value) return null
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const parsed = toRecordObject(item)
+      if (parsed) return parsed
+    }
+    return null
+  }
+  if (typeof value === 'object') return value as Record<string, any>
+  if (typeof value !== 'string') return null
+  const text = value.trim()
+  if (!text) return null
+  try {
+    const parsed = JSON.parse(text)
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, any>) : null
+  } catch {
+    return null
+  }
+}
+
+function normalizeConditionForProgress(input: unknown, evolveAtFallback?: unknown) {
+  const raw = toRecordObject(input)
+  if (!raw) return undefined
+  const evolveAt = String(raw.evolveAt ?? raw.evolve_at ?? evolveAtFallback ?? '').trim()
+  const startDate = String(raw.startDate ?? raw.start_date ?? '').trim()
+  const endDate = String(raw.endDate ?? raw.end_date ?? '').trim()
+  const evolutionMode = String(raw.evolutionMode ?? raw.evolution_mode ?? '').trim()
+  const useClassEndDate = toOptionalBoolean(raw.useClassEndDate ?? raw.use_class_end_date)
+
+  const value: Partial<EditValue> = {
+    ...(raw as Partial<EditValue>),
+    evolveAt: evolveAt || undefined,
+    startDate,
+    endDate,
+    useClassEndDate: useClassEndDate === null ? undefined : useClassEndDate,
+    evolutionMode:
+      evolutionMode === 'specific' || evolutionMode === 'range' || evolutionMode === 'classEnd' || evolutionMode === 'none'
+        ? (evolutionMode as EditValue['evolutionMode'])
+        : undefined
+  }
+
+  if (!value.evolutionMode || value.evolutionMode === 'none') {
+    value.evolutionMode = value.useClassEndDate ? 'classEnd' : value.evolveAt ? 'specific' : value.startDate || value.endDate ? 'range' : 'none'
+  }
+  return value
+}
+
+function normalizeStepByConditionList(input: unknown, evolveAtFallback?: unknown): ProgressByConditionItem[] {
+  if (!Array.isArray(input)) return []
+  return input
+    .map((entry) => {
+      const raw = toRecordObject(entry)
+      if (!raw) return null
+      const nodeKey = String(raw.nodeKey ?? raw.conditionNodeKey ?? raw.condition_node_key ?? '').trim()
+      const condition = normalizeConditionForProgress(raw.condition, evolveAtFallback)
+      const overrideRaw = toRecordObject(raw.override)
+      const overrideDataRaw = toRecordObject(overrideRaw?.data)
+      const hasOverrideValue = toOptionalBoolean(raw.hasOverride ?? raw.has_override)
+      return {
+        nodeKey,
+        eligible: toOptionalBoolean(raw.eligible) === true,
+        reasons: Array.isArray(raw.reasons) ? raw.reasons.map((reason: any) => String(reason)).filter(Boolean) : [],
+        condition,
+        overrideData: overrideDataRaw ? ({ ...overrideDataRaw } as Partial<EditValue>) : undefined,
+        hasOverride: hasOverrideValue === null ? Boolean(overrideDataRaw) : hasOverrideValue
+      } as ProgressByConditionItem
+    })
+    .filter((item): item is ProgressByConditionItem => item !== null)
 }
 
 function toFlagLabel(value: unknown) {
@@ -1202,6 +1463,33 @@ function openLessons(row: RowItem, course: CourseSeqItem) {
 
 function closeLessonsModal() {
   lessonsModal.value.open = false
+}
+
+function rowContractKey(contract?: RowContract | null) {
+  if (!contract) return ''
+  return [
+    String(contract.partnerId || '').trim(),
+    String(contract.contractId || '').trim(),
+    String(contract.company || '').trim(),
+    String(contract.start || '').trim(),
+    String(contract.end || '').trim(),
+    String(contract.status || '').trim()
+  ].join('|')
+}
+
+function openContracts(row: RowItem) {
+  const list = Array.isArray(row.contracts) && row.contracts.length > 0 ? row.contracts : row.contract ? [row.contract] : []
+  if (list.length === 0) return
+  contractsModal.value = {
+    open: true,
+    apprenticeName: row.name,
+    contracts: list,
+    preferredKey: rowContractKey(row.contract)
+  }
+}
+
+function closeContractsModal() {
+  contractsModal.value.open = false
 }
 
 function openDetail(row: RowItem, tab: 'timeline' | 'transitions' | 'steps' = 'timeline') {
@@ -1416,19 +1704,38 @@ function detailSteps(row: RowItem): DetailStepItem[] {
     return row.steps
       .slice()
       .sort((a, b) => (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER))
-      .map((step, index) => ({
-        key: `${row.id}:${step.nodeKey || step.courseId || step.courseName || index}`,
-        order: step.order ?? index + 1,
-        nodeKey: String(step.nodeKey || ''),
-        label: String(step.courseName || `Etapa ${index + 1}`),
+      .map((step, index) => {
+        const stepEvolveAt = String(step.evolveAt ?? step.evolve_at ?? '').trim()
+        const byConditionItems = normalizeStepByConditionList(step?.eligibility?.byCondition, stepEvolveAt)
+        const byConditionNodeKey = resolveStepConditionNodeKey(
+          step,
+          byConditionItems,
+          Number.isFinite(Number(step.classId)) ? Number(step.classId) : undefined
+        )
+        const byConditionSelected =
+          (byConditionNodeKey ? byConditionItems.find((item) => item.nodeKey === byConditionNodeKey) : undefined) ??
+          (byConditionItems.length === 1 ? byConditionItems[0] : undefined)
+        const condition =
+          byConditionSelected?.condition ??
+          normalizeConditionForProgress(step.condition ?? step.resolvedCondition ?? step.resolved_condition, stepEvolveAt)
+        return {
+          key: `${row.id}:${step.nodeKey || step.courseId || step.courseName || index}`,
+          order: step.order ?? index + 1,
+          nodeKey: String(step.nodeKey || ''),
+          label: String(step.courseName || `Etapa ${index + 1}`),
           progress: {
+            evolveAt: String(condition?.evolveAt ?? stepEvolveAt ?? '').trim() || undefined,
+            condition,
             classId: step.classId,
             className: String(step.class?.name ?? step.className ?? '').trim() || undefined,
             classNodeKey: String(step.class?.nodeKey ?? step.classNodeKey ?? '').trim() || undefined,
+            conditionNodeKey: byConditionNodeKey || undefined,
             status: step.status ?? undefined,
+            eligibilityByCondition: byConditionItems,
             lessons: normalizeLessonList(step.lessons ?? step.themes ?? step.topics)
           } as ProgressItem
-        }))
+        }
+      })
   }
   return courseSeq.value.map((course, index) => {
     const progress = getProgress(row, course)
@@ -1543,6 +1850,30 @@ function parseCount(...candidates: unknown[]) {
   return null
 }
 
+function stepPreviewKey(rowId: number, progressKey: string) {
+  return `${rowId}:${progressKey}`
+}
+
+function getLocalConditionPreview(rowId: number, progressKeys: Array<string | null | undefined>) {
+  for (const key of progressKeys) {
+    const clean = String(key || '').trim()
+    if (!clean) continue
+    const found = localConditionPreviewByStep.value[stepPreviewKey(rowId, clean)]
+    if (found) return found
+  }
+  return undefined
+}
+
+function setLocalConditionPreview(rowId: number, progressKeys: Array<string | null | undefined>, value: Partial<EditValue>) {
+  const next = { ...localConditionPreviewByStep.value }
+  for (const key of progressKeys) {
+    const clean = String(key || '').trim()
+    if (!clean) continue
+    next[stepPreviewKey(rowId, clean)] = { ...value }
+  }
+  localConditionPreviewByStep.value = next
+}
+
 async function loadApprenticeWorkflows() {
   if (props.workflowId === undefined || props.workflowId === null || props.workflowId === '') {
     rows.value = []
@@ -1552,11 +1883,17 @@ async function loadApprenticeWorkflows() {
 
   try {
     const q = searchQuery.value.trim()
+    const minMonthsRaw = Number(contractMinMonthsFilter.value)
+    const minMonths = Number.isFinite(minMonthsRaw) && minMonthsRaw >= 0 ? minMonthsRaw : undefined
     const res = await api.getApprenticeWorkflows(props.workflowId, {
       limit: pageLimit.value,
       offset: pageOffset.value,
       q: q || undefined,
       classStatus: classStatusFilter.value || 'inProgress',
+      hasContract: hasContractFilter.value === 'all' ? undefined : hasContractFilter.value === 'with',
+      contractMinMonths: minMonths,
+      sort: sortHasContractFirst.value ? 'hasContract' : undefined,
+      order: sortHasContractFirst.value ? 'desc' : undefined,
       transitionsLimit: transitionsLimit.value
     })
     const payload = res.data as any
@@ -1597,8 +1934,20 @@ async function loadApprenticeWorkflows() {
       return
     }
     rows.value = list.map((item) => {
+      const apprenticeId = Number(item.apprenticeId) || 0
       const contracts = Array.isArray(item.contracts) ? item.contracts : []
       const primary = selectPrimaryContract(contracts, item.preferredContract ?? null)
+      const mappedContracts = contracts
+        .map((contract) => mapApiContractToRow(contract))
+        .filter((contract): contract is RowContract => contract !== null)
+      const preferredMapped = mapApiContractToRow(item.preferredContract ?? null)
+      if (preferredMapped && !mappedContracts.some((contract) => rowContractKey(contract) === rowContractKey(preferredMapped))) {
+        mappedContracts.unshift(preferredMapped)
+      }
+      if (mappedContracts.length === 0) {
+        const primaryMapped = mapApiContractToRow(primary)
+        if (primaryMapped) mappedContracts.push(primaryMapped)
+      }
       const progress: Record<string, ProgressItem> = {}
       const steps = Array.isArray(item.steps) ? item.steps : []
       const workflowMembership = normalizeWorkflowMembership((item as any)?.workflowMembership)
@@ -1640,28 +1989,54 @@ async function loadApprenticeWorkflows() {
             (stats as any).overall_performance
         )
         const eligibility = step?.eligibility || {}
+        const stepEvolveAt = String(step?.evolveAt ?? step?.evolve_at ?? '').trim()
+        const byConditionItems = normalizeStepByConditionList(eligibility?.byCondition, stepEvolveAt)
+        const byConditionNodeKey = resolveStepConditionNodeKey(
+          step,
+          byConditionItems,
+          Number.isFinite(Number(classId)) ? Number(classId) : undefined
+        )
+        const byConditionSelected =
+          (byConditionNodeKey ? byConditionItems.find((item) => item.nodeKey === byConditionNodeKey) : undefined) ??
+          (byConditionItems.length === 1 ? byConditionItems[0] : undefined)
+        const fallbackStepCondition = normalizeConditionForProgress(
+          step?.condition ?? step?.resolvedCondition ?? step?.resolved_condition,
+          stepEvolveAt
+        )
+        const stepCondition = byConditionSelected?.condition ?? fallbackStepCondition
+        const progressKeyNormalized = normalizeKey(key)
+        const localConditionPreview = getLocalConditionPreview(apprenticeId, [
+          key,
+          progressKeyNormalized ? `n:${progressKeyNormalized}` : '',
+          step?.courseId !== undefined && step?.courseId !== null ? `id:${step.courseId}` : '',
+          step?.nodeKey ? `node:${step.nodeKey}` : ''
+        ])
+        const mergedCondition = localConditionPreview ? { ...(stepCondition || {}), ...localConditionPreview } : stepCondition
+        const mergedEvolveAt = String(
+          localConditionPreview?.evolveAt ??
+            mergedCondition?.evolveAt ??
+            stepEvolveAt ??
+            ''
+        ).trim()
         const lessons = normalizeLessonList(step?.lessons ?? step?.themes ?? step?.topics)
         const entry = {
           classId: Number.isFinite(Number(classId)) ? Number(classId) : undefined,
           className,
           classNodeKey,
+          conditionNodeKey: byConditionNodeKey || undefined,
           hasEnrollment,
           status: step?.apprenticeStatus ?? step?.status ?? undefined,
           attendance,
           exam,
+          evolveAt: mergedEvolveAt || undefined,
+          condition: mergedCondition,
           eligibleForNext: step?.eligibleForNext ?? null,
           eligibleForNextReason: Array.isArray(step?.eligibleForNextReason)
             ? step.eligibleForNextReason.map((r: any) => String(r))
             : [],
           eligibilityAny: typeof eligibility?.anyEligible === 'boolean' ? eligibility.anyEligible : null,
           eligibilityReasons: Array.isArray(eligibility?.reasons) ? eligibility.reasons.map((r: any) => String(r)) : [],
-          eligibilityByCondition: Array.isArray(eligibility?.byCondition)
-            ? eligibility.byCondition.map((item: any) => ({
-                nodeKey: String(item?.nodeKey || ''),
-                eligible: !!item?.eligible,
-                reasons: Array.isArray(item?.reasons) ? item.reasons.map((r: any) => String(r)) : []
-              }))
-            : [],
+          eligibilityByCondition: byConditionItems,
           isFinalStep:
             typeof step?.isFinalStep === 'boolean'
               ? step.isFinalStep
@@ -1671,26 +2046,19 @@ async function loadApprenticeWorkflows() {
           lessons
         }
         progress[key] = entry
-        const normalized = normalizeKey(key)
-        if (normalized) progress[`n:${normalized}`] = entry
+        if (progressKeyNormalized) progress[`n:${progressKeyNormalized}`] = entry
         if (step?.courseId !== undefined && step?.courseId !== null) {
           progress[`id:${step.courseId}`] = entry
         }
         if (step?.nodeKey) progress[`node:${step.nodeKey}`] = entry
       }
       return {
-        id: Number(item.apprenticeId) || 0,
+        id: apprenticeId,
         name: String(item.name || ''),
         cpf: String(item.cpf || ''),
         email: String(item.email || ''),
-        contract: primary
-          ? {
-              company: String(primary.corporateName || ''),
-              start: String(primary.startedAt || ''),
-              end: primary.endedAt ? String(primary.endedAt) : '',
-              status: String(primary.status || '')
-            }
-          : null,
+        contract: mapApiContractToRow(primary),
+        contracts: mappedContracts,
         progress,
         steps,
         workflowMembership
@@ -1718,6 +2086,16 @@ onMounted(() => {
     const params = new URLSearchParams(window.location.search)
     const initialRunId = params.get('runId')
     if (initialRunId) runId.value = initialRunId
+    const hasContractParam = params.get('hasContract')
+    if (hasContractParam === '1') hasContractFilter.value = 'with'
+    if (hasContractParam === '0') hasContractFilter.value = 'without'
+    const contractMinMonthsParam = params.get('contractMinMonths')
+    if (contractMinMonthsParam !== null) contractMinMonthsFilter.value = contractMinMonthsParam
+    const sortParam = String(params.get('sort') || '').trim().toLowerCase()
+    const orderParam = String(params.get('order') || '').trim().toLowerCase()
+    if (sortParam === 'hascontract' && orderParam === 'desc') {
+      sortHasContractFirst.value = true
+    }
   }
   loadApprenticeWorkflows()
 })
@@ -1762,6 +2140,27 @@ watch(
 )
 
 watch(
+  () => hasContractFilter.value,
+  () => {
+    scheduleApprenticeReload(true)
+  }
+)
+
+watch(
+  () => contractMinMonthsFilter.value,
+  () => {
+    scheduleApprenticeReload(true)
+  }
+)
+
+watch(
+  () => sortHasContractFirst.value,
+  () => {
+    scheduleApprenticeReload(true)
+  }
+)
+
+watch(
   () => transitionsLimit.value,
   () => {
     hasLoadedRows.value = false
@@ -1783,12 +2182,22 @@ const filteredRows = computed(() => {
   return rows.value
 })
 
-const statusFilterOptions: Array<{ value: 'all' | 'inProgress' | 'concluded' | 'incomplete'; label: string }> = [
+const statusFilterOptions: Array<{ value: 'all' | 'inProgress' | 'concluded' | 'inactive'; label: string }> = [
   { value: 'all', label: 'Todos' },
   { value: 'inProgress', label: 'Em andamento' },
   { value: 'concluded', label: 'Concluídos' },
-  { value: 'incomplete', label: 'Incompletos' }
+  { value: 'inactive', label: 'Inativos' }
 ]
+
+function rowContractCardClass(row: RowItem) {
+  if (!row.contract) return 'border-[#e8edf3] bg-white'
+  const months = contractDurationMonths(row.contract.start, row.contract.end)
+  if (months === null || months === 15) return 'border-[#e8edf3] bg-white'
+  if (months <= 12) return 'border-sky-200 bg-sky-50/70'
+  if (months <= 18) return 'border-emerald-200 bg-emerald-50/70'
+  if (months <= 24) return 'border-amber-200 bg-amber-50/70'
+  return 'border-rose-200 bg-rose-50/70'
+}
 
 const selectedDetailRow = computed(() =>
   detailRowId.value === null ? null : (rows.value.find((row) => row.id === detailRowId.value) ?? null)
@@ -1884,6 +2293,18 @@ function resolveProgressKey(row: RowItem, course: CourseSeqItem) {
   if (course.courseId !== undefined && row.progress?.[`id:${course.courseId}`]) return `id:${course.courseId}`
   if (row.progress?.[`node:${course.nodeId}`]) return `node:${course.nodeId}`
   return course.courseName
+}
+
+function mapApiContractToRow(contract?: ApiContract | null): RowContract | null {
+  if (!contract) return null
+  return {
+    partnerId: contract.partnerId !== undefined && contract.partnerId !== null ? String(contract.partnerId) : undefined,
+    contractId: contract.contractId !== undefined && contract.contractId !== null ? String(contract.contractId) : undefined,
+    company: String(contract.corporateName || ''),
+    start: String(contract.startedAt || ''),
+    end: contract.endedAt ? String(contract.endedAt) : '',
+    status: String(contract.status || '')
+  }
 }
 
 function selectPrimaryContract(contracts: ApiContract[], preferredContract?: ApiContract | null) {
@@ -1991,11 +2412,11 @@ async function openEdit(row: RowItem, course: CourseSeqItem) {
   const courseKey = resolveProgressKey(row, course)
   const p = row.progress?.[courseKey]
   const options = conditionOptionsForCourse(course)
-  const classNodeKey = String(p?.classNodeKey || '').trim()
-  if (classNodeKey && !options.some((opt) => opt.nodeKey === classNodeKey)) {
-    options.unshift({ nodeKey: classNodeKey, label: 'Condicao da turma' })
+  const progressConditionNodeKey = String(p?.conditionNodeKey || p?.classNodeKey || '').trim()
+  if (progressConditionNodeKey && !options.some((opt) => opt.nodeKey === progressConditionNodeKey)) {
+    options.unshift({ nodeKey: progressConditionNodeKey, label: 'Condicao da turma' })
   }
-  const conditionNodeKey = classNodeKey || defaultConditionKey(options)
+  const conditionNodeKey = progressConditionNodeKey || defaultConditionKey(options)
   const requiresContract = conditionNodeKey ? conditionRequiresContract(conditionNodeKey) : false
   const baseValue: EditValue = {
     startDate: '',
@@ -2122,6 +2543,12 @@ function setEvolutionMode(mode: EditValue['evolutionMode']) {
 async function saveEdit() {
   if (!edit.value) return
   if (!props.workflowId || !edit.value.conditionNodeKey) return
+  const savedEditState = {
+    rowId: edit.value.rowId,
+    courseKey: edit.value.courseKey,
+    courseName: edit.value.courseName,
+    value: { ...edit.value.value }
+  }
   const override = {
     startDate: edit.value.value.startDate,
     endDate: edit.value.value.endDate,
@@ -2165,6 +2592,12 @@ async function saveEdit() {
         edit.value = { ...edit.value, overrideId: Number(createdId) }
       }
     }
+    const normalizedCourseName = normalizeKey(savedEditState.courseName)
+    setLocalConditionPreview(
+      savedEditState.rowId,
+      [savedEditState.courseKey, savedEditState.courseName, normalizedCourseName ? `n:${normalizedCourseName}` : ''],
+      savedEditState.value
+    )
     closeEdit()
     toast({
       title: 'Condicao atualizada',
@@ -2257,11 +2690,11 @@ void _keepForTypecheck
       <div class="mb-3 flex flex-wrap items-center gap-2">
         <span
           class="inline-flex items-center gap-1.5 rounded-full border border-blue-300 bg-blue-50 px-3 py-1 text-[11px] font-bold text-blue-700"
-          ><span class="h-1.5 w-1.5 rounded-full bg-blue-500" />{{ totalTracked }} acompanhados</span
+          ><span class="h-1.5 w-1.5 rounded-full bg-blue-500" />{{ totalTracked }} Acompanhados</span
         >
         <span
           class="inline-flex items-center gap-1.5 rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-[11px] font-bold text-blue-700"
-          ><span class="h-1.5 w-1.5 rounded-full bg-blue-400" />{{ totalInProgress }} em andamento</span
+          ><span class="h-1.5 w-1.5 rounded-full bg-blue-400" />{{ totalInProgress }} Em andamento</span
         >
       </div>
 
@@ -2287,6 +2720,51 @@ void _keepForTypecheck
           @click="classStatusFilter = opt.value"
         >
           {{ opt.label }}
+        </button>
+        <div class="ml-2 inline-flex items-center rounded-[9px] border border-slate-200 bg-white p-0.5">
+          <button
+            type="button"
+            class="h-7 rounded-[7px] px-2 text-[11px] font-semibold"
+            :class="hasContractFilter === 'all' ? 'bg-slate-800 text-white' : 'text-slate-500'"
+            @click="hasContractFilter = 'all'"
+          >
+            Todos
+          </button>
+          <button
+            type="button"
+            class="h-7 rounded-[7px] px-2 text-[11px] font-semibold"
+            :class="hasContractFilter === 'with' ? 'bg-slate-800 text-white' : 'text-slate-500'"
+            @click="hasContractFilter = 'with'"
+          >
+            Tem contrato
+          </button>
+          <button
+            type="button"
+            class="h-7 rounded-[7px] px-2 text-[11px] font-semibold"
+            :class="hasContractFilter === 'without' ? 'bg-slate-800 text-white' : 'text-slate-500'"
+            @click="hasContractFilter = 'without'"
+          >
+            Sem contrato
+          </button>
+        </div>
+        <Input
+          v-model="contractMinMonthsFilter"
+          type="number"
+          min="0"
+          placeholder="Mín. meses de contrato"
+          class="h-8 w-[190px] rounded-[9px] border-slate-200 bg-white text-[12px]"
+        />
+        <button
+          type="button"
+          class="h-8 rounded-[9px] border px-3 text-[12px] font-semibold"
+          :class="
+            sortHasContractFirst
+              ? 'border-slate-800 bg-slate-800 text-white'
+              : 'border-slate-200 bg-white text-slate-500'
+          "
+          @click="sortHasContractFirst = !sortHasContractFirst"
+        >
+          Com contrato primeiro
         </button>
         <span class="ml-auto text-[11.5px] text-slate-400">{{ filteredRows.length }} de {{ totalCount }}</span>
       </div>
@@ -2329,7 +2807,10 @@ void _keepForTypecheck
           v-for="r in filteredRows"
           :key="r.id"
           class="overflow-hidden rounded-[14px] border border-[#e8edf3] bg-white transition-shadow duration-150"
-          :class="isExpanded(r.id) ? 'shadow-[0_4px_16px_rgba(0,0,0,0.07)]' : 'shadow-[0_1px_3px_rgba(0,0,0,0.04)]'"
+          :class="[
+            rowContractCardClass(r),
+            isExpanded(r.id) ? 'shadow-[0_4px_16px_rgba(0,0,0,0.07)]' : 'shadow-[0_1px_3px_rgba(0,0,0,0.04)]'
+          ]"
         >
           <button type="button" class="w-full text-left" @click="toggleRow(r.id)">
             <div class="flex items-center gap-3.5 px-4 py-3">
@@ -2352,11 +2833,21 @@ void _keepForTypecheck
               </div>
               <div class="w-[160px] min-w-0 shrink-0">
                 <template v-if="r.contract">
+                  <button
+                    type="button"
+                    class="w-full rounded-[8px] px-1 py-0.5 text-left transition-colors hover:bg-slate-50"
+                    title="Ver todos os contratos"
+                    @click.stop="openContracts(r)"
+                  >
                   <div class="truncate text-[11.5px] font-semibold text-slate-700">{{ r.contract.company }}</div>
                   <div class="mt-0.5 text-[10px] text-slate-400">
                     {{ contractDurationLabel(r.contract.start, r.contract.end) || '0 meses' }} ·
                     {{ fmtDate(r.contract.end) }}
                   </div>
+                  <div v-if="r.contracts.length > 1" class="mt-0.5 text-[9.5px] font-semibold text-blue-600">
+                    {{ r.contracts.length }} contratos
+                  </div>
+                  </button>
                 </template>
                 <span v-else class="text-[10.5px] italic text-slate-300">Sem contrato</span>
               </div>
@@ -2486,7 +2977,7 @@ void _keepForTypecheck
                         </button>
                       </div>
                     </div>
-                    <div class="mt-1">
+                    <div class="mt-1 flex flex-wrap items-center gap-1">
                       <span
                         class="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold"
                         :style="{
@@ -2496,7 +2987,23 @@ void _keepForTypecheck
                         }"
                         >{{ statusVisual(getProgress(r, c)?.status).label }}</span
                       >
+                      <span
+                        v-if="specificEvolutionDate(getProgress(r, c))"
+                        class="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold text-slate-700"
+                        >{{ specificEvolutionDate(getProgress(r, c)) }}</span
+                      >
+                      <span
+                        v-if="hasConditionOverride(getProgress(r, c))"
+                        class="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.04em] text-amber-700"
+                        :title="
+                          overrideEvolutionDate(getProgress(r, c))
+                            ? `Override: ${overrideEvolutionDate(getProgress(r, c))}`
+                            : 'Condicao com override aplicado'
+                        "
+                        >Override</span
+                      >
                     </div>
+
                     <div
                       v-if="progressReasonSummary(getProgress(r, c))"
                       class="mt-1.5 line-clamp-2 text-[9.5px] font-medium leading-relaxed text-rose-600"
@@ -2890,6 +3397,77 @@ void _keepForTypecheck
                 }}</span>
               </div>
               <div class="mt-1.5 text-[11px] text-slate-400">{{ detailRunSummary(transition) }}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="contractsModal.open" class="absolute inset-0 z-30">
+      <div class="absolute inset-0 bg-black/30 backdrop-blur-sm" @click="closeContractsModal" />
+      <div
+        class="absolute left-1/2 top-1/2 flex w-[min(760px,92vw)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-2xl border bg-white shadow-2xl"
+      >
+        <div class="flex items-center justify-between border-b px-4 py-3">
+          <div>
+            <div class="text-sm font-bold text-slate-900">Contratos do aprendiz</div>
+            <div class="text-xs text-slate-600">
+              {{ contractsModal.apprenticeName }} • {{ contractsModal.contracts.length }} contrato(s)
+            </div>
+          </div>
+          <Button size="icon" variant="ghost" class="h-8 w-8" @click="closeContractsModal">
+            <X class="h-4 w-4" />
+          </Button>
+        </div>
+        <div class="max-h-[65vh] overflow-auto p-4">
+          <div
+            v-if="contractsModal.contracts.length === 0"
+            class="rounded-xl border border-dashed bg-slate-50 p-6 text-center text-xs text-slate-500"
+          >
+            Nenhum contrato encontrado para este aprendiz.
+          </div>
+          <div v-else class="space-y-2">
+            <div
+              v-for="(contract, contractIdx) in contractsModal.contracts"
+              :key="`contract-modal:${rowContractKey(contract)}:${contractIdx}`"
+              class="rounded-xl border border-slate-200 bg-slate-50/40 p-3"
+            >
+              <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0">
+                  <div class="truncate text-sm font-semibold text-slate-900">{{ contract.company || '-' }}</div>
+                  <div class="text-[11px] text-slate-500">
+                    Contrato: {{ contract.contractId || '-' }} • Parceiro: {{ contract.partnerId || '-' }}
+                  </div>
+                </div>
+                <div class="flex items-center gap-1.5">
+                  <span
+                    class="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold"
+                    :class="contractStatusVisual(contract.status).class"
+                    >{{ contractStatusVisual(contract.status).label }}</span
+                  >
+                  <span
+                    v-if="rowContractKey(contract) === contractsModal.preferredKey"
+                    class="inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-700"
+                    >Preferred</span
+                  >
+                </div>
+              </div>
+              <div class="mt-2 grid grid-cols-1 gap-2 text-[11px] sm:grid-cols-3">
+                <div class="rounded-lg border border-slate-200 bg-white px-2 py-1.5">
+                  <span class="text-slate-500">Início:</span>
+                  <span class="ml-1 font-semibold text-slate-900">{{ fmtDateWithShortYear(contract.start) }}</span>
+                </div>
+                <div class="rounded-lg border border-slate-200 bg-white px-2 py-1.5">
+                  <span class="text-slate-500">Término:</span>
+                  <span class="ml-1 font-semibold text-slate-900">{{ fmtDateWithShortYear(contract.end) }}</span>
+                </div>
+                <div class="rounded-lg border border-slate-200 bg-white px-2 py-1.5">
+                  <span class="text-slate-500">Duração:</span>
+                  <span class="ml-1 font-semibold text-slate-900">
+                    {{ contractDurationLabel(contract.start, contract.end) || '-' }}
+                  </span>
+                </div>
+              </div>
             </div>
           </div>
         </div>
